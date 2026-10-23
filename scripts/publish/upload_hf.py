@@ -7,13 +7,16 @@
    脚本会**自己探测**系统代理（读 `HKCU\\...\\Internet Settings` 的
    `ProxyServer`），再显式塞进 HTTP_PROXY/HTTPS_PROXY —— 不要手写端口号，
    换机器/换代理软件后会失效。
-2. **速度**：必须 `hf_transfer`（`pip install hf_transfer`），
-   否则大文件上传只有 ~150KB/s，3GB 模型要 4.5 小时；开了之后 30+MB/s。
+2. **速度**：huggingface_hub 2.x 已弃用 `HF_HUB_ENABLE_HF_TRANSFER`，
+   高性能传输由 `hf_xet` 承担（`pip install hf_xet`，脚本自动开
+   `HF_XET_HIGH_PERFORMANCE=1`），否则大文件上传很慢。
 3. **一次传完**：`upload_folder` 自动跳过已存在的相同文件，可安全重跑。
+4. **离线模式**：脚本会在 import huggingface_hub 之前清掉 `HF_HUB_OFFLINE`，
+   否则 create_repo / upload_folder 会抛 OfflineModeIsEnabled。
 
 用法
 ----
-    pip install hf_transfer huggingface_hub
+    pip install hf_xet huggingface_hub
     export HF_TOKEN=hf_xxx                    # 或 Windows: set HF_TOKEN=hf_xxx
     python upload_hf.py \
         --model_repo   <user>/<model-name>   --model_dir   <staged model dir> \
@@ -126,6 +129,23 @@ def read_cached_token() -> str | None:
     return None
 
 
+def _force_online() -> None:
+    """在 import huggingface_hub **之前**解除离线模式。
+
+    huggingface_hub 在 `constants.py` 里于 import 时读取 HF_HUB_OFFLINE，
+    之后 `utils/_http.py` 的 hf_request_event_hook 会拦截**所有** HTTP 请求
+    —— create_repo / upload_folder 直接抛 OfflineModeIsEnabled，
+    ALL_UPLOADS_COMPLETE 永远打不出来。
+
+    这里在进程内清掉该变量，保证无论调用方怎么设环境变量，上传都能联网。
+    （必须在 `from huggingface_hub import HfApi` 之前执行。）
+    """
+    for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        if os.environ.get(k):
+            os.environ.pop(k)
+            print("[offline] 已清除 %s，上传需要联网" % k)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Source2Voice · 阶段7 上传到 HuggingFace")
     ap.add_argument("--model_repo", help="模型仓库 id，如 user/MyVoice")
@@ -141,9 +161,12 @@ def main():
     proxy = None if a.no_proxy else (a.proxy or detect_system_proxy())
     apply_proxy(proxy)
 
-    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+    os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
     if a.endpoint:
         os.environ["HF_ENDPOINT"] = a.endpoint
+
+    # 必须在 import huggingface_hub 之前解除离线
+    _force_online()
 
     token = read_cached_token()
     if not token:
@@ -152,11 +175,13 @@ def main():
         raise SystemExit(2)
     print("[auth] token OK (len=%d)" % len(token))
 
+    # huggingface_hub 2.x 已弃用 HF_HUB_ENABLE_HF_TRANSFER，
+    # 高性能传输改由 hf_xet 承担（HF_XET_HIGH_PERFORMANCE）。
     try:
-        import hf_transfer  # noqa: F401
+        import hf_xet  # noqa: F401
     except ImportError:
-        print("WARNING: 未安装 hf_transfer，上传会很慢（~150KB/s）。"
-              "建议 pip install hf_transfer", file=sys.stderr)
+        print("WARNING: 未安装 hf_xet，大文件上传会变慢。"
+              "建议 pip install hf_xet", file=sys.stderr)
 
     from huggingface_hub import HfApi
     api = HfApi(token=token)

@@ -126,7 +126,12 @@ PY
     --stage "$stage" \
     --model_card "$REPO/examples/deadlock_${hero}/HF_MODEL_CARD.md" || return 1
 
-  "$PY_TRAIN" "$REPO/scripts/publish/upload_hf.py" \
+  # 上传必须联网：huggingface_hub 在 HF_HUB_OFFLINE=1 下会拦截**所有** HTTP 请求
+  # （utils/_http.py 的 hf_request_event_hook），create_repo / upload_folder 会直接抛
+  # OfflineModeIsEnabled，ALL_UPLOADS_COMPLETE 永远打不出来。
+  # 只在这一条命令上解除离线，训练/推理/评估阶段仍然保持离线。
+  HF_HUB_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
+    "$PY_TRAIN" "$REPO/scripts/publish/upload_hf.py" \
     --model_repo "$modelrepo" \
     --model_dir "$stage/model" \
     --message "Add ${display} (Deadlock) voice model: OmniVoice 0.6B LoRA, English" || return 1

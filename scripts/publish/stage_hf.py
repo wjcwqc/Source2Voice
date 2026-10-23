@@ -27,9 +27,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 import s2v_config  # noqa: E402
 
+# lora/ 目录只暂存这两个文件：adapter_config.json 描述 LoRA 结构，
+# adapter_model.safetensors 是适配器权重。checkpoint 里的 model.safetensors
+# / optimizer.bin / scheduler.bin / random_states_*.pkl 属于训练态，不进仓库。
+LORA_STAGE_FILES = ("adapter_config.json", "adapter_model.safetensors")
 
-def copytree(src, dst, skip_dirs=(), skip_exts=()):
-    """复制目录，跳过指定子目录与扩展名。"""
+
+def copytree(src, dst, skip_dirs=(), skip_exts=(), only_files=None):
+    """复制目录，跳过指定子目录与扩展名。
+
+    only_files 不为 None 时，只复制文件名在该集合中的文件。
+    """
     n = 0
     for root, dirs, files in os.walk(src):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
@@ -38,6 +46,8 @@ def copytree(src, dst, skip_dirs=(), skip_exts=()):
         os.makedirs(out, exist_ok=True)
         for f in files:
             if os.path.splitext(f)[1].lower() in skip_exts:
+                continue
+            if only_files is not None and f not in only_files:
                 continue
             s = os.path.join(root, f)
             d = os.path.join(out, f)
@@ -89,8 +99,14 @@ def main():
         print("model/merged       : %d files" % n)
     if a.lora:
         dst = os.path.join(mdir, "lora")
-        n = copytree(a.lora, dst, skip_dirs=("__pycache__",))
-        print("model/lora         : %d files" % n)
+        # checkpoint 目录里除了 adapter，还有完整 model.safetensors(2.5GB) /
+        # optimizer.bin(215MB) / scheduler.bin / random_states_*.pkl 这些**训练态**文件。
+        # 完整模型已经在 merged/ 里了，lora/ 只需要能复现适配器的两个文件
+        # （与 wjcwqc/MireskaVoice 的仓库结构保持一致），否则白传 2.8GB。
+        n = copytree(a.lora, dst, skip_dirs=("__pycache__",),
+                     only_files=LORA_STAGE_FILES)
+        print("model/lora         : %d files (%s)"
+              % (n, ", ".join(sorted(LORA_STAGE_FILES))))
     training = os.path.join(mdir, "training")
     os.makedirs(training, exist_ok=True)
     if a.trainlog and os.path.exists(a.trainlog):
