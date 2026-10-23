@@ -454,16 +454,26 @@ bash scripts/train/run_train.sh \
 
 ```bash
 python scripts/eval/test_infer.py \
-    --lora_adapter "$S2V_WORK/exp/omnivoice_<hero>_lora/checkpoint-600"
+    --lora_adapter "$S2V_WORK/exp/omnivoice_<hero>_lora/checkpoint-600" \
+    --texts "$S2V_WORK/eval/<hero>_eval_texts.json" \
+    --lang en \
+    --ref_audio "<一条留出真人 wav>" --ref_text "<该 wav 对应台词>"
 ```
 
 每条留出文本生成两次：ref（带参考音频）/ noref（纯文本）。
 **noref 能出对音色 = 音色已内化进模型参数**。
 
+> `test_infer.py` 需要 `import omnivoice.*`，所以要用**训练环境**跑，
+> 并保证 `PYTHONPATH=<OmniVoice 源码目录>`。
+
 ### 6.2 量化评估
 
 ```bash
-python scripts/eval/eval_omnivoice.py
+python scripts/eval/eval_omnivoice.py \
+    --ckpt_root "$S2V_WORK/out/omnivoice_<hero>" \
+    --real_list "$S2V_WORK/eval/<hero>_real_list.txt" \
+    --texts     "$S2V_WORK/eval/<hero>_eval_texts.json" \
+    --lang en
 ```
 
 | 指标 | 含义 | 判据 |
@@ -476,6 +486,33 @@ python scripts/eval/eval_omnivoice.py
 
 **英文数据集注意**：CER 对英文同样适用，但**不要做繁转简**
 （`zhconv` 是中文专用），英文侧只需统一标点与大小写归一。
+
+**为什么必须用 `--real_list` 而不是 glob 采样**：
+真人基线取决于**选了哪几条留出片段**。用 `--real_dir` + `--real_glob`
+采样时，glob 顺序或文件数量一变，选中的片段就完全不同，基线与
+spk-sim 全部不可比 —— 实测同一份产物基线从 0.644 变成 0.339。
+固定清单才是可复现的口径。
+
+清单由 dev 留出集生成，**必须验证与训练集零重叠**：
+
+```bash
+python - <<'PY'
+import json
+base = "D:/dwvits/work/data/omnivoice_<hero>"
+tr = {json.loads(l)["audio_path"].replace("\\","/").lower()
+      for l in open(base+"/train.jsonl", encoding="utf-8")}
+dev = [json.loads(l) for l in open(base+"/dev.jsonl", encoding="utf-8")]
+leak = [d for d in dev if d["audio_path"].replace("\\","/").lower() in tr]
+print("dev=%d 泄漏=%d" % (len(dev), len(leak)))
+with open("D:/dwvits/work/eval/<hero>_real_list.txt","w",encoding="utf-8") as f:
+    for d in dev:
+        f.write(d["audio_path"].replace("\\","/")+"\n")
+PY
+```
+
+**ASR 后端**：评估脚本自动探测（`--asr_backend auto`），
+优先 `openai-whisper`，没有则回落 `faster-whisper`。
+中文评估还需 `zhconv`（繁转简），缺了 CER 会虚高 2–3 倍。
 
 ### 6.3 合并 LoRA → 独立模型
 

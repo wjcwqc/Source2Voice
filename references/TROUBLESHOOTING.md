@@ -268,6 +268,11 @@ file:///D:/dwvits/data/omnivoice_dark_willow/tokens/train/audios/shard-000000.ta
 > **英文数据集不要做繁转简**（`zhconv` 是中文专用，英文侧会误伤）。
 > 英文只需统一标点（弯引号 → 直引号）与大小写归一即可。
 
+> **注意 `zhconv` 可能压根没装**。`make_norm()` 里是 `except ImportError: pass`
+> 静默跳过，于是繁体全部保留、CER 虚高 —— 实测同一份产物：
+> 缺 zhconv 时 ckpt-600/ref CER = 0.202，装上后 = **0.000**。
+> 中文评估前先确认：`python -c "import zhconv"`。
+
 ### 相似度看着很低就以为失败了
 **症状**：spk-sim 0.6 就判定「没学到」。
 **原因**：没有基线对比。
@@ -279,6 +284,53 @@ file:///D:/dwvits/data/omnivoice_dark_willow/tokens/train/audios/shard-000000.ta
 **症状**：`RuntimeError: Failed to load audio`。
 **原因**：faster-whisper 依赖 ffmpeg 解码音频，而系统没装 ffmpeg。
 **解法**：用 `soundfile` 自己读 wav 传 numpy 进去。
+
+### `ModuleNotFoundError: No module named 'whisper'`
+**症状**：评估脚本第 138 行 `import whisper` 直接崩。
+**原因**：评估要用 OpenAI whisper，但训练环境常常只装了 faster-whisper
+（包名不同，`import whisper` 不成立）。
+**解法**：评估脚本已支持**双后端自动探测**（`--asr_backend auto`）：
+
+| 后端 | 包名 | 说明 |
+|---|---|---|
+| `whisper` | `openai-whisper` | `import whisper`，Windows 上依赖较重 |
+| `faster_whisper` | `faster-whisper` | `from faster_whisper import WhisperModel`，轻量 |
+
+```bash
+pip install openai-whisper -i https://mirrors.aliyun.com/pypi/simple/
+# 或
+pip install faster-whisper  -i https://mirrors.aliyun.com/pypi/simple/
+```
+
+两个都装不上时，脚本会打印明确安装提示而不是抛 ModuleNotFoundError。
+
+> **中文评估还需要 `zhconv`**（繁转简），缺失时 CER 会虚高 2–3 倍：
+> `pip install zhconv -i https://mirrors.aliyun.com/pypi/simple/`
+
+### 真人基线和历史报告对不上
+**症状**：同一模型、同一批 checkpoint，重跑后基线从 0.644 变成 0.339。
+**原因**：基线取决于**选了哪几条真人片段**。
+用 `--real_dir` + `--real_glob` 采样时，glob 顺序 / 文件数量一变，
+选中的片段就完全不同，基线和 spk-sim 都不可比。
+**解法**：用 `--real_list` 固定住片段清单（每行一条 wav 路径）：
+
+```bash
+python scripts/eval/eval_omnivoice.py \
+    --ckpt_root  D:/dwvits/out/omnivoice_paige \
+    --real_list  D:/dwvits/work/eval/paige_real_list.txt \
+    --texts      D:/dwvits/work/eval/paige_eval_texts.json \
+    --lang en
+```
+
+> 清单里的片段**必须是留出集**（不在训练清单里）。
+> 本项目用 dev.jsonl 生成，已验证与 train.jsonl 零重叠。
+
+### `NoSuchFile: Load model from D:/dwvits/models/campplus.onnx failed`
+**症状**：评估脚本建 onnx session 时报模型文件不存在。
+**原因**：`s2v_config` 里 `CAMPPLUS` 硬编码成 `$ROOT/models/campplus.onnx`，
+但 CosyVoice 发行包把它放在 `models/cosyvoice/<model>/campplus.onnx`。
+**解法**：`s2v_config._resolve_campplus()` 现在会在 `$ROOT/models` 下
+递归查找 `campplus.onnx`；也可以显式指定 `S2V_CAMPPLUS=<绝对路径>`。
 
 ### 带参考音频反而更长
 **症状**：同一句话，带 ref 生成 33 s，纯文本 16 s。
