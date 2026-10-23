@@ -1,8 +1,11 @@
 {
   "_comment": "英雄档案：Source2Voice 提取阶段的唯一配置源。换英雄只改这个文件。",
+  "_game_comment": "game 字段对应 s2v_config.py 的 GAME_REGISTRY 键（dota2 / deadlock / cs2）。不写则用全局 S2V_GAME 环境变量。",
 
+  "game": "dota2",
   "hero_key": "dark_willow",
   "display_name": "Dark Willow / 邪影芳灵 (Mireska)",
+  "asset_code": "dark_willow",
   "asset_prefixes": ["helmet_sylph_", "sylph_"],
 
   "groups": {
@@ -11,14 +14,15 @@
     "announcer_killing_spree": "sounds/vo/announcer_dlc_dark_willow_killing_spree/"
   },
 
-  "subtitle_files": [
-    "resource/subtitles/subtitles_dark_willow_english.txt",
-    "resource/subtitles/subtitles_sylph_english.txt",
-    "resource/subtitles/subtitles_announcer_dlc_dark_willow_english.txt",
-    "resource/subtitles/subtitles_announcer_dlc_dark_willow_killing_spree_english.txt"
+  "_subtitle_comment": "台词来源。vpk: = VPK 内 .txt；file: = 磁盘未打包目录（支持 glob）；inline: = 内联 JSON。subtitle_files 是旧字段（自动当 vpk: 处理）。",
+  "subtitle_sources": [
+    "vpk:resource/subtitles/subtitles_dark_willow_english.txt",
+    "vpk:resource/subtitles/subtitles_sylph_english.txt",
+    "vpk:resource/subtitles/subtitles_announcer_dlc_dark_willow_english.txt",
+    "vpk:resource/subtitles/subtitles_announcer_dlc_dark_willow_killing_spree_english.txt"
   ],
 
-  "_token_rules_comment": "每个规则是一个模板；占位符 {stem}=完整文件名主干，{rest_<资产前缀去掉下划线>}=去掉该资产前缀后的主干。按顺序取第一个在字幕表中命中的候选。",
+  "_token_rules_comment": "每个规则是一个模板；占位符 {stem}=完整文件名主干，{rest_<资产前缀去掉下划线>}=去掉该资产前缀后的主干，{stem}_* = 前缀通配。按顺序取第一个在字幕表中命中的候选。",
   "token_rules": {
     "vo": [
       "dark_willow_{stem}",
@@ -32,6 +36,9 @@
       "announcer_dlc_dark_willow_killing_spree_{stem}"
     ]
   },
+
+  "_token_priority_comment": "同一 stem 匹配到多个 token 时的排序（Dota 2 用不上，Deadlock 必需）。",
+  "token_priority": [],
 
   "languages": ["english", "schinese"],
 

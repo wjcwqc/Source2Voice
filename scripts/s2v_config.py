@@ -8,6 +8,7 @@
 --------
 S2V_ROOT            工作根目录（默认 D:/dwvits）
 S2V_GAME_DIR        Steam 游戏根目录（默认 D:/SteamLibrary/steamapps/common/dota 2 beta）
+S2V_GAME            游戏标识（dota2 / deadlock / cs2，见 GAME_REGISTRY，默认 dota2）
 S2V_DATASET_DIR     数据集输出目录（默认 $S2V_ROOT/../DarkWillow_VoiceDataset）
 S2V_WORK            训练工作目录（默认 $S2V_ROOT/work）
 S2V_REPO            OmniVoice 源码目录（默认 $S2V_ROOT/src/OmniVoice）
@@ -35,11 +36,52 @@ GAME_DIR = os.environ.get(
 )
 GAME_ROOT = os.path.join(GAME_DIR, "game")
 
-# 语言包 -> VPK 目录索引文件。不同语言的资源分装在不同的 VPK 包里。
-LANG_PACKAGES = {
-    "english": os.path.join(GAME_ROOT, "dota", "pak01_dir.vpk"),
-    "schinese": os.path.join(GAME_ROOT, "dota_schinese", "pak01_dir.vpk"),
+# ---------------------------------------------------------------- 游戏注册表
+# 每个 Source 2 游戏一套：资源根目录名 + 语言包子目录名 + 台词本地化目录。
+# 换游戏只需在这里加一条（或用环境变量 S2V_GAME 覆盖），英雄档案里再指定英雄。
+#
+#   game_root      <GAME_DIR>/game 下的子目录（存放 pak01_dir.vpk）
+#   lang_roots     语言包子目录名 -> 语言键；中文用 schinese
+#   vo_loc_dir     台词本地化目录（相对 <GAME_DIR>/game/<game_root>），
+#                  Deadlock 的台词不在 VPK 里，而是解压在磁盘上
+GAME_REGISTRY = {
+    "dota2": {
+        "game_root": "dota",
+        "lang_roots": {"english": "dota", "schinese": "dota_schinese"},
+        "vo_loc_dir": None,
+    },
+    "deadlock": {
+        "game_root": "citadel",
+        "lang_roots": {"english": "citadel"},
+        "vo_loc_dir": "resource/localization/citadel_generated_vo",
+    },
+    "cs2": {
+        "game_root": "csgo",
+        "lang_roots": {"english": "csgo", "schinese": "csgo_schinese"},
+        "vo_loc_dir": None,
+    },
 }
+
+GAME = os.environ.get("S2V_GAME", "dota2")
+
+_GAME_SPEC = GAME_REGISTRY.get(GAME, GAME_REGISTRY["dota2"])
+
+# 语言包 -> VPK 目录索引文件。不同语言的资源分装在不同的 VPK 包里。
+# 英雄档案可用 "vpk_overrides" 单独指定某语言的 VPK 路径。
+LANG_PACKAGES = {}
+for _lang, _root in _GAME_SPEC["lang_roots"].items():
+    LANG_PACKAGES[_lang] = os.path.join(GAME_ROOT, _root, "pak01_dir.vpk")
+
+
+def resolve_vpk(hero_cfg: dict, lang: str) -> str:
+    """解析某语言实际使用的 VPK 目录索引路径。
+
+    优先级：英雄档案 ``vpk_overrides[lang]`` > 全局 LANG_PACKAGES。
+    """
+    override = hero_cfg.get("vpk_overrides", {}).get(lang)
+    if override:
+        return override
+    return LANG_PACKAGES.get(lang, "")
 
 # ---------------------------------------------------------------- 数据集
 DATASET_DIR = os.environ.get("S2V_DATASET_DIR", "D:/DarkWillow_VoiceDataset")
@@ -110,7 +152,11 @@ def rel(path: str) -> str:
 
 if __name__ == "__main__":
     print("S2V_ROOT      =", ROOT)
+    print("S2V_GAME      =", GAME, "spec:", _GAME_SPEC["game_root"])
     print("GAME_DIR     =", GAME_DIR)
+    print("LANG_PACKAGES:")
+    for k, v in LANG_PACKAGES.items():
+        print("   %-10s %s (exists=%s)" % (k, v, os.path.exists(v)))
     print("DATASET_DIR  =", DATASET_DIR)
     print("REPO         =", REPO)
     print("MODEL        =", MODEL)

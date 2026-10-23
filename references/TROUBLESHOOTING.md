@@ -4,6 +4,69 @@
 
 ---
 
+## 换游戏阶段
+
+### 找不到英雄的资源目录（显示名 ≠ 内部代号）
+**症状**：VPK 扫描结果里没有「邪影芳灵」「Paige」这种显示名。
+**原因**：Valve 的内部代号跟显示名无关。
+- Dota 2：邪影芳灵 = `dark_willow`，音频却是 `helmet_sylph_*`
+- Deadlock：Paige = `bookworm`，Violet = `artist`，Billy = `punkgoat`
+**解法**：扫 VPK 的 `sounds/vo/` 目录，每个英雄一个子目录，目录名即内部代号。
+Deadlock 还可以直接读磁盘上的 `hero_presence_cache.json`（56 条映射）：
+
+```bash
+python - <<'PY'
+import json, glob
+for p in glob.glob(r"<游戏>/game/citadel/**/hero_presence_cache.json", recursive=True):
+    for k, v in json.load(open(p, encoding="utf-8")).items():
+        print(k, "->", v)
+PY
+```
+
+> ⚠️ 常见误判：Deadlock 的 Billy 内部代号是 `punkgoat`，不是 `billy`。
+
+### VPK 里找不到台词文件
+**症状**：`sounds/vo/` 扫得到音频，但 `resource/subtitles/` 里没有对应文件。
+**原因**：**Deadlock 的台词不在 VPK 里**，而是解压在磁盘上的未打包目录：
+`<游戏>/game/citadel/resource/localization/citadel_generated_vo/citadel_generated_vo_english.txt`
+（5.8 MB / 78453 行，KV 风格 `"token" "text"`）。
+**解法**：用 `subtitle_sources` 的 `file:` 前缀指向磁盘文件：
+
+```json
+"subtitle_sources": [
+  "file:<游戏>/game/citadel/resource/localization/citadel_generated_vo/citadel_generated_vo_english.txt"
+]
+```
+
+### 找不到中文语音包
+**症状**：`citadel_schinese/pak01_dir.vpk` 存在但只有 50 条 panorama UI 资源。
+**原因**：Deadlock **根本没做中文语音**，不是配置问题。
+**解法**：确认后走「做英文即可」路线，阶段 2 的 ASR 整段跳过。
+
+### 同一 stem 匹配到多个 token
+**症状**：一个音频能对上好几个字幕 token，选出来的台词不属于这个音频。
+**原因**：Deadlock 的 token 命名是 `<stem>_<后缀>`，后缀集合为
+`hero_3d` / `ability_3d` / `ult_3d` / `zipline_3d` / `ping_2d` / `hero_announcer`，
+且存在 `_alt` 一对多变体。
+**解法**：用 `token_rules` 的 `{stem}_*` 前缀通配 + `token_priority` 显式排序：
+
+```json
+"token_rules": { "vo": ["{stem}_*"] },
+"token_priority": ["hero_3d","ability_3d","ult_3d","zipline_3d","ping_2d","hero_announcer"]
+```
+
+实测覆盖率：Paige 1547/1615（95.8%）、Violet 2033/2111（96.3%），
+未匹配项均为纯音效（无台词），属正常。
+
+### 两个英雄的 manifest 互相覆盖
+**症状**：跑完 Paige 再跑 Violet，manifest 里只剩 Violet。
+**原因**：两个英雄写同一个 `metadata/manifest.json`。
+**解法**（已修）：pipeline 现在写 `manifest_<hero_key>.json`，
+并自动合并去重到 `manifest.json`（键 = `hero_key + language + group + filename`）。
+合并旧 manifest 时会 `setdefault("hero_key", ...)` 以兼容历史文件。
+
+---
+
 ## 提取阶段
 
 ### VPK 解析报签名错误
@@ -18,6 +81,7 @@
 **原因**：不是所有 `.vsnd_c` 都是 MP3 —— 可能有其他编码。
 **解法**：先检查 `blob[offset] == 0xFF`。若不是，说明该英雄用了别的格式，
 需要单独分析容器头。
+（Dota 2 与 Deadlock 实测格式一致，前 4 字节小端 uint32 = MP3 偏移。）
 
 ### 音频文件名前缀和字幕 token 对不上
 **症状**：`matched subtitle` 远小于 `clips`。
@@ -41,6 +105,8 @@ for stem in stems:
 - 中文 → `game/dota_schinese/pak01_*.vpk`（45 分卷）
 
 **解法**：`scripts/s2v_config.py` 的 `LANG_PACKAGES` 已配好。
+`GAME_REGISTRY` 里每个游戏一套 `game_root` + `lang_roots`，用 `S2V_GAME` 环境变量切换。
+英雄档案还可以用 `vpk_overrides` 单独覆盖某语言的 VPK 路径。
 
 ---
 
@@ -130,6 +196,39 @@ for stem in stems:
 **解法**：**必须**写 `file:///D:/dwvits/.../shard-000000.tar`。
 `scripts/train/make_data_config.py` 已自动转换。
 
+### 训练启动即报 `AssertionError: file:///D:/... is not a file.`
+**症状**：`omnivoice/data/dataset.py:143` 抛断言，`manifest_path` 被判不是文件。
+**原因**：**`file:///` 前缀加错了地方**。三种路径的形态不能互换：
+
+| 位置 | 正确形态 | 校验方式 |
+|---|---|---|
+| `data_config.json` 的 `manifest_path` | **普通绝对路径** `D:\...\data.lst` | `os.path.isfile()` |
+| `data.lst` 内部的 tar 路径 | **`file:///D:/...`** | webdataset gopen 按 URL 解析 |
+| `data.lst` 内部的 jsonl 路径 | **普通绝对路径** | `LabelDataset` 用 `open()` |
+
+**解法**：
+- `make_data_config.py` 的 `manifest_path` 不要走 `to_file_url()`
+- `tokenize_single.py` 写 data.lst 时，tar 路径走 `to_file_url()`、jsonl 路径保持普通路径
+- `make_data_config.py` 内置 `normalize_data_lst()` 自愈：已有 shards 时
+  跑一次 `--skip_tokenize` 即可批量修正
+
+**✅ 对照速查**（dark willow 成功样本）:
+```
+file:///D:/dwvits/data/omnivoice_dark_willow/tokens/train/audios/shard-000000.tar D:\dwvits\data\omnivoice_dark_willow\tokens\train\txts\shard-000000.jsonl 100 333.667
+```
+
+### `ModuleNotFoundError: No module named 'scipy'`
+**症状**：跑数据准备脚本报缺 scipy。
+**原因**：OmniVoice 训练环境不一定装了 scipy（纯 CPU offload 训练本身不需要）。
+**解法**：数据准备（tokenize / loudness / 评估）脚本改用
+装了 scipy + soundfile + numpy 的环境，例如 `envs/train/Scripts/python.exe`。
+纯训练任务仍用 `S2V_PYTHON` 指向的环境。
+
+### `NameError: name 'sys' is not defined`
+**症状**：`scripts/clean/refine_dataset.py` 报 `sys` 未定义。
+**原因**：脚本原本就漏了 `import sys`（既有 bug）。
+**解法**：在 `import shutil` 后补 `import sys`。已修。
+
 ### 存 checkpoint 时报错中断
 **症状**：`save_pretrained` 抛异常，训练直接停。
 **原因**：PEFT 的 `save_pretrained` 在这个模型结构上失败，但全量 state dict 是好的。
@@ -165,6 +264,9 @@ for stem in stems:
 **症状**：CER 30%+。
 **原因**：繁体没转简。
 **解法**：CER 前 `zhconv.convert(t, "zh-hans")` + 全角数字归一 + 标点剥离。
+
+> **英文数据集不要做繁转简**（`zhconv` 是中文专用，英文侧会误伤）。
+> 英文只需统一标点（弯引号 → 直引号）与大小写归一即可。
 
 ### 相似度看着很低就以为失败了
 **症状**：spk-sim 0.6 就判定「没学到」。

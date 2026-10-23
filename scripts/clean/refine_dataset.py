@@ -1,18 +1,28 @@
-"""为 CosyVoice / 其它 TTS 生成可审核的中文精修数据集。
+"""Source2Voice · 阶段 3：把清洗后的台词清单分桶成可训练数据集。
 
 设计原则
 --------
-1. 原始音频和原始清单只读，绝不覆盖；输出到新的 D:\\dwvits\\data 目录。
+1. 原始音频和原始清单只读，绝不覆盖；输出到新的 D 盘 data 目录。
 2. 响度统一不是把异常样本硬删掉：每条都写入 report.csv，分为 core/style/review 三桶。
 3. "过分语气"只做保守标记（感叹/重复/语气词/声学离群），不把表达性样本直接丢掉。
    core 用于先训音色；style 作为后续语气增强候选；review 需人工听审。
-4. 输出 CosyVoice 官方数据准备所需的 wav.scp/text/utt2spk/spk2utt/instruct。
+4. 输出 Kaldi 格式（wav.scp/text/utt2spk/spk2utt/instruct），
+   训练侧用 bucket_to_list.py 转成 GPT-SoVITS .list。
 
-默认输入是已经做过文本清洗的 904 条中文英雄台词：
-    python refine_dataset.py
+输入格式（GPT-SoVITS 风格 .list，每行）:
+    <audio_path>|<speaker>|<lang>|<text>
 
-也可以加入播音包，但建议先分开训练/评估：
-    python refine_dataset.py --input vo.list announcer.list killing.list
+示例
+----
+    # 中文（Dota 2）
+    python refine_dataset.py \
+        --input "$DATASET/metadata/schinese_dark_willow_vo_pure.list" \
+        --out "$WORK/clean_dataset" --langs zh
+
+    # 英文（Deadlock）
+    python refine_dataset.py \
+        --input "$DATASET/metadata/english_paige_vo.list" \
+        --out "$WORK/clean_dataset_paige" --speaker paige --langs en
 """
 from __future__ import annotations
 
@@ -23,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -38,12 +49,17 @@ DEFAULT_OUT = os.path.join(s2v_config.WORK, "clean_dataset")
 
 # 只用于标记 review/style，不用于盲目删除。中文台词中这些字也可能是正常内容。
 INTERJECTIONS = set("啊哎嘿哈哼喂哦呀呃嗯呵嘶哇喔诶")
+# 英文感叹词（按词边界匹配，避免把 "oh" 命中 "another"）
+INTERJECTION_WORDS = re.compile(
+    r"\b(oh|ah|hey|hi|wow|ugh|hm|mm|eh|ahh|whoa|gosh|damn|yeah|yep|"
+    r"oops|ow|argh|hah|ha|heh|hooray|alas|nope|yikes)\b", re.I)
 RE_REPEAT = re.compile(r"(.)\1{2,}")
 RE_PUNCT_BURST = re.compile(r"[!?！？]{2,}")
 RE_WS = re.compile(r"\s+")
 
 
-def load_rows(paths: list[str]) -> list[dict]:
+def load_rows(paths: list[str], langs: set[str] | None = None,
+              default_speaker: str = "speaker") -> list[dict]:
     rows = []
     for path in paths:
         with open(path, encoding="utf-8") as f:
@@ -56,10 +72,10 @@ def load_rows(paths: list[str]) -> list[dict]:
                     wav, speaker, lang, text = parts
                 elif len(parts) == 2:
                     wav, text = parts
-                    speaker, lang = "dark_willow", "zh"
+                    speaker, lang = default_speaker, "zh"
                 else:
                     continue
-                if lang.strip() != "zh":
+                if langs and lang.strip() not in langs:
                     continue
                 text = text.strip()
                 if not text or not os.path.exists(wav.strip()):
@@ -73,7 +89,7 @@ def load_rows(paths: list[str]) -> list[dict]:
                 stem = os.path.splitext(os.path.basename(wav))[0]
                 rows.append({
                     "src": os.path.abspath(wav.strip()),
-                    "speaker": speaker.strip() or "dark_willow",
+                    "speaker": speaker.strip() or default_speaker,
                     "lang": lang.strip(),
                     "text": text,
                     "group": group,
@@ -140,10 +156,14 @@ def text_flags(text: str) -> list[str]:
         flags.append("leading_interjection")
     if any(ch in INTERJECTIONS for ch in text):
         flags.append("interjection")
+    m = INTERJECTION_WORDS.search(text)
+    if m:
+        flags.append("interjection")
+        if m.start() <= 4:
+            flags.append("leading_interjection")
     if "!" in text or "！" in text:
         flags.append("exclaim")
     return flags
-
 
 def make_bucket(flags: list[str], audio_outlier: bool, clipped: bool) -> str:
     # 音频异常优先 review；表达性但声学正常的样本进入 style。
@@ -201,13 +221,28 @@ def main():
     ap.add_argument("--peak-db", type=float, default=-1.0)
     ap.add_argument("--min-seconds", type=float, default=0.8)
     ap.add_argument("--max-seconds", type=float, default=11.0)
+    ap.add_argument("--speaker", default=None,
+                    help="utt2spk 里的说话人标签；默认取清单第一行的 speaker")
+    ap.add_argument("--langs", default=None,
+                    help="逗号分隔的语言过滤（默认不过滤）")
+    ap.add_argument("--instruction", default=None,
+                    help="instruct 文本；默认按语言自动生成")
     ap.add_argument("--clean-output", action="store_true",
                     help="显式清理本脚本输出目录中的旧 bucket；默认不删除任何文件")
     a = ap.parse_args()
 
-    rows = load_rows(a.input)
+    langs = set(x.strip() for x in a.langs.split(",")) if a.langs else None
+    rows = load_rows(a.input, langs=langs)
     if not rows:
-        raise SystemExit("没有找到可用中文样本")
+        raise SystemExit("没有找到可用样本（检查 --input / --langs）")
+
+    speaker = a.speaker or rows[0]["speaker"]
+    # 指令文本按语种给默认模板，--instruction 可覆盖
+    lang_of = rows[0]["lang"]
+    default_instruction = ("英文游戏角色台词，语气自然，清晰发音"
+                           if lang_of.startswith("en") else
+                           "中文游戏角色台词，语气自然，清晰发音")
+    instruction = a.instruction or default_instruction
 
     # 同一清单若重复输入，不按路径重复写入；同文本重复保留并标记，避免悄悄改变语料。
     seen_paths = set()
@@ -258,7 +293,7 @@ def main():
         digest = hashlib.sha1(r["src"].encode("utf-8")).hexdigest()[:8]
         r.update({"flags": ",".join(sorted(set(flags))),
                   "audio_outlier": int(audio_outlier), "clipped": int(clipped),
-                  "bucket": bucket, "utt": f"dw_{idx:04d}_{digest}",
+                  "bucket": bucket, "utt": f"spk_{idx:04d}_{digest}",
                   "target_sr": a.target_sr, "target_db": a.target_db,
                   "peak_db": a.peak_db})
         out.append(r)
@@ -276,11 +311,13 @@ def main():
     buckets = defaultdict(list)
     for r in out:
         buckets[r["bucket"]].append(r)
-    for bucket, instruction in (("core", "中文游戏角色台词，语气自然，清晰发音"),
-                                ("style", "中文游戏角色台词，保留原始表达性语气"),
-                                ("review", "中文游戏角色台词，需人工复听确认")):
+    style_instruction = instruction.replace("语气自然", "保留原始表达性语气")
+    review_instruction = instruction.replace("语气自然", "需人工复听确认")
+    for bucket, bucket_instruction in (("core", instruction),
+                                       ("style", style_instruction),
+                                       ("review", review_instruction)):
         write_kaldi_bucket(os.path.join(a.out, bucket), buckets[bucket],
-                           "dark_willow", instruction, clean_output=a.clean_output)
+                           speaker, bucket_instruction, clean_output=a.clean_output)
 
     # 固定验证集：按 utt 的稳定 hash 选 20 条，避免每次运行随机漂移。
     # core/style 分开，style 只用于语气泛化验收，不应混进首轮训练。
@@ -311,8 +348,8 @@ def main():
     with open(os.path.join(a.out, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     with open(os.path.join(a.out, "README.md"), "w", encoding="utf-8") as f:
-        f.write("# Dark Willow 中文 CosyVoice 精修数据集\n\n")
-        f.write("本目录由 `tts/refine_dataset.py` 生成。原始 WAV 和原始清单未被修改。\n\n")
+        f.write("# %s 精修数据集\n\n" % speaker)
+        f.write("本目录由 `scripts/clean/refine_dataset.py` 生成。原始 WAV 和原始清单未被修改。\n\n")
         f.write("- `core/`：保守音色训练集，优先用于首轮训练\n")
         f.write("- `style/`：感叹/语气词/重复文本/播音包等表达性候选，先做验证再混入\n")
         f.write("- `review/`：组内响度/时长/削波离群，需人工复听，不要直接训练\n")

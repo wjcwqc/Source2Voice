@@ -28,6 +28,41 @@ DEFAULT_LIST = os.path.join(s2v_config.META_DIR, "schinese_dark_willow_vo_pure.l
 DEFAULT_OUT = os.path.join(s2v_config.DATA_DIR, "omnivoice_dark_willow")
 SEED = 42
 
+# OmniVoice 的 language_id 只认 LANG_IDS（"en" / "zh" / "ja" ...）。
+# 清单里可能出现各种写法，统一归一。
+LANG_ALIASES = {
+    "english": "en",
+    "en-us": "en",
+    "en_us": "en",
+    "schinese": "zh",
+    "chinese": "zh",
+    "cn": "zh",
+    "zh-cn": "zh",
+    "zh_cn": "zh",
+    "japanese": "ja",
+    "korean": "ko",
+    "french": "fr",
+    "german": "de",
+    "spanish": "es",
+    "russian": "ru",
+    "portuguese": "pt",
+    "italian": "it",
+}
+
+
+def normalize_lang(raw: str) -> str:
+    """把清单里的语言写法归一成 OmniVoice 的 language_id。"""
+    v = (raw or "").strip().lower().replace("_", "-")
+    if not v:
+        return "en"
+    if v in LANG_ALIASES:
+        return LANG_ALIASES[v]
+    if v.startswith("zh"):
+        return "zh"
+    if v.startswith("en"):
+        return "en"
+    return v
+
 
 def load_entries(list_path: str) -> list:
     entries = []
@@ -48,7 +83,7 @@ def load_entries(list_path: str) -> list:
                 "id": sid,
                 "audio_path": os.path.abspath(audio_path.strip()).replace("\\", "/"),
                 "text": text.strip(),
-                "language_id": "zh" if lang.strip().startswith("zh") else lang.strip(),
+                "language_id": normalize_lang(lang),
             })
     return entries
 

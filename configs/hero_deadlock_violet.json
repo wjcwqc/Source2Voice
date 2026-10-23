@@ -1,0 +1,31 @@
+{
+  "game": "deadlock",
+  "hero_key": "violet",
+  "display_name": "Violet",
+  "asset_code": "artist",
+  "asset_prefixes": ["artist_"],
+  "languages": ["english"],
+  "vpk_overrides": {
+    "english": "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/pak01_dir.vpk"
+  },
+  "subtitle_sources": [
+    "file:D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/resource/localization/citadel_generated_vo/citadel_generated_vo_english.txt"
+  ],
+  "groups": {
+    "vo": "sounds/vo/artist/"
+  },
+  "token_rules": {
+    "vo": ["{stem}_*"]
+  },
+  "token_priority": [
+    "hero_3d",
+    "ability_3d",
+    "ult_3d",
+    "zipline_3d",
+    "ping_2d",
+    "hero_announcer"
+  ],
+  "target_sr": 32000,
+  "target_channels": 1,
+  "target_sample_fmt": "pcm_s16le"
+}

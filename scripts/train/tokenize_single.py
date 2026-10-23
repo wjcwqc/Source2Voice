@@ -41,6 +41,18 @@ def load_audio(path):
 import torchaudio  # noqa: E402
 
 
+def to_file_url(path: str) -> str:
+    """Windows 路径 -> file:/// URL（webdataset gopen 要求）。
+
+    webdataset 的 gopen 把 "D:/xxx" 当成 URL scheme 去解析，会失败；
+    必须写成 "file:///D:/xxx"。
+    """
+    p = os.path.abspath(path).replace("\\", "/")
+    if not p.startswith("/"):
+        p = "/" + p
+    return "file://" + p
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input_jsonl", required=True)
@@ -85,8 +97,10 @@ def main():
         if jsonl_file is not None:
             jsonl_file.close()
         if shard_idx > 0 and shard_count > 0:
+            # tar 走 webdataset gopen -> 需要 file:/// URL
+            # jsonl 走 LabelDataset 的 open()/os.path.exists() -> 必须普通路径
             manifest.append((
-                os.path.abspath(f"audios/shard-{shard_idx-1:06d}.tar"),
+                to_file_url(f"audios/shard-{shard_idx-1:06d}.tar"),
                 os.path.abspath(f"txts/shard-{shard_idx-1:06d}.jsonl"),
                 shard_count, shard_dur,
             ))
@@ -127,7 +141,7 @@ def main():
     jsonl_file.close()
     if shard_count > 0:
         manifest.append((
-            os.path.abspath(f"audios/shard-{shard_idx-1:06d}.tar"),
+            to_file_url(f"audios/shard-{shard_idx-1:06d}.tar"),
             os.path.abspath(f"txts/shard-{shard_idx-1:06d}.jsonl"),
             shard_count, shard_dur,
         ))

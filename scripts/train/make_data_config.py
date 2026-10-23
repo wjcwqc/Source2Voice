@@ -17,6 +17,7 @@ webdataset 的 gopen 不认 Windows 盘符路径（`D:/...` 会被当成相对�
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -31,6 +32,42 @@ def to_file_url(path: str) -> str:
     if not p.startswith("/"):
         p = "/" + p
     return "file://" + p
+
+
+def normalize_data_lst(path: str) -> int:
+    """把 data.lst 里的 tar 路径规范成 file:/// URL，jsonl 路径保持普通路径。
+
+    webdataset gopen 读 tar 时把 "D:/xxx" 当 URL scheme 解析会失败；
+    omnivoice 的 LabelDataset 用 open()/os.path.exists() 读 jsonl，
+    必须保持普通文件系统路径。两种路径形式不能互换。
+
+    返回被修正的行数。
+    """
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r", encoding="utf-8") as f:
+        lines = [ln.strip() for ln in f if ln.strip()]
+    fixed = 0
+    out = []
+    for ln in lines:
+        parts = ln.split()
+        if len(parts) != 4:
+            out.append(ln)
+            continue
+        tar, jl, c, d = parts
+        if tar.startswith("file://"):
+            new_tar = tar
+        elif re.match(r"^[A-Za-z]:[\\/]", tar) or tar.startswith("/"):
+            new_tar = to_file_url(tar)
+        else:
+            new_tar = tar
+        if new_tar != tar:
+            fixed += 1
+        out.append(f"{new_tar} {jl} {c} {d}")
+    if fixed:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+    return fixed
 
 
 def main():
@@ -67,10 +104,17 @@ def main():
         if not os.path.exists(lst):
             print("ERROR: 缺少 %s（tokenize 未产出 data.lst）" % lst, file=sys.stderr)
             raise SystemExit(2)
+        n_fixed = normalize_data_lst(lst)
+        if n_fixed:
+            print("  已修正 %d 行 tar 路径 -> file:/// URL" % n_fixed)
 
+    # 注意：manifest_path 必须是**普通文件系统路径**。
+    # omnivoice/data/dataset.py:143 用 os.path.isfile() 校验它，
+    # 写成 file:///D:/... 会直接抛 AssertionError "<path> is not a file."。
+    # file:/// 前缀只出现在 data.lst **内部**的 tar 路径上（webdataset gopen 需要）。
     cfg = {
-        "train": [{"manifest_path": [to_file_url(os.path.join(data_dir, "tokens", "train", "data.lst"))]}],
-        "dev": [{"manifest_path": [to_file_url(os.path.join(data_dir, "tokens", "dev", "data.lst"))]}],
+        "train": [{"manifest_path": [os.path.join(data_dir, "tokens", "train", "data.lst")]}],
+        "dev": [{"manifest_path": [os.path.join(data_dir, "tokens", "dev", "data.lst")]}],
     }
     with open(out, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=4, ensure_ascii=False)
