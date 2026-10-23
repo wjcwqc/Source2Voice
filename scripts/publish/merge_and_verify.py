@@ -49,11 +49,12 @@ def main():
     print("  output :", a.output)
 
     # 优先用官方 CLI（PEFT 键名带 .default，手写脚本极易漏）
+    # 注意官方参数名是 --lora_adapter / --output_dir（不是 --adapter / --output）
     cmd = [
         a.python, "-m", "omnivoice.cli.merge_lora",
         "--base_model", a.base_model,
-        "--adapter", a.adapter,
-        "--output", a.output,
+        "--lora_adapter", a.adapter,
+        "--output_dir", a.output,
     ]
     env = dict(os.environ)
     env["PYTHONPATH"] = s2v_config.REPO + os.pathsep + env.get("PYTHONPATH", "")
@@ -72,7 +73,10 @@ def main():
 
     # 校验产物
     print("\n=== 校验 ===")
-    need = ["config.json"]
+    # 必需项：config.json + 权重 + tokenizer（tokenizer 可能是目录，
+    # 也可能是 tokenizer.json / tokenizer_config.json 两个扁平文件 —— 后者是
+    # OmniVoice 基座的正常形态，别只判目录）
+    need = ["config.json", "tokenizer.json", "tokenizer_config.json", "chat_template.jinja"]
     ok = True
     for f in need:
         p = os.path.join(a.output, f)
@@ -81,14 +85,16 @@ def main():
         ok = ok and exists
     st = [f for f in os.listdir(a.output) if f.endswith(".safetensors")]
     print("  safetensors: %s" % (", ".join(st) if st else "缺失"))
+    ok = ok and bool(st)
     if st:
         total = sum(os.path.getsize(os.path.join(a.output, f)) for f in st)
         print("  权重总大小: %.2f GB" % (total / 1e9))
     print("  目录总大小: %.2f GB" % (dir_size(a.output) / 1e9))
-    # tokenizer / audio_tokenizer 是否被带出来
-    for sub in ("audio_tokenizer", "tokenizer"):
-        p = os.path.join(a.output, sub)
-        print("  %-28s %s" % (sub + "/", "OK" if os.path.isdir(p) else "缺失"))
+    # audio_tokenizer 是目录（语音 tokenizer 权重）
+    p = os.path.join(a.output, "audio_tokenizer")
+    at_ok = os.path.isdir(p)
+    print("  %-28s %s" % ("audio_tokenizer/", "OK" if at_ok else "缺失"))
+    ok = ok and at_ok
     if not ok:
         raise SystemExit("合并产物不完整")
     print("\nMERGE_OK ->", a.output)
