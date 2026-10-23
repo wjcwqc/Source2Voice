@@ -1,0 +1,157 @@
+diff --git a/omnivoice/training/builder.py b/omnivoice/training/builder.py
+index 72c50ff..9eb23fb 100644
+--- a/omnivoice/training/builder.py
++++ b/omnivoice/training/builder.py
+@@ -49,6 +49,7 @@ from omnivoice.data.dataset import WebDatasetReader, prepare_data_manifests_from
+ from omnivoice.data.processor import OmniVoiceSampleProcessor
+ from omnivoice.models.omnivoice import OmniVoice, OmniVoiceConfig, _resolve_model_path
+ from omnivoice.training.config import TrainingConfig
++from omnivoice.utils.common import str2bool
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -130,9 +131,63 @@ def build_model_and_tokenizer(
+     if config.use_lora:
+         model = _apply_lora(model, config)
+ 
++    # 6. Optional: use system RAM as VRAM for the frozen base weights.
++    # Windows PyTorch has no NCCL, so FSDP is unavailable; this single-process
++    # per-layer offload achieves the same effect: frozen fp32 base weights stay
++    # in RAM, each decoder layer is streamed to GPU just before use and moved
++    # back once its gradients are computed. Trainable params (LoRA adapters +
++    # modules_to_save) always stay on GPU.
++    if str2bool(os.environ.get("OMNIVOICE_CPU_OFFLOAD", "false")):
++        _install_cpu_offload(model)
++
+     return model, tokenizer
+ 
+ 
++def _offload_frozen(module, device):
++    """Move only frozen (requires_grad=False) params of a module to device."""
++    for p in module.parameters():
++        if not p.requires_grad:
++            p.data = p.data.to(device)
++
++
++def _install_cpu_offload(model, device="cuda"):
++    """Stream frozen base weights between RAM and GPU per decoder layer.
++
++    Forward: layer i (and prefetch i+1) are moved to GPU before use.
++    Backward: after a layer's parameter gradients are computed
++    (full backward hook), its frozen weights return to RAM.
++    Eval/no_grad forwards return weights to RAM immediately.
++    """
++    layers = list(model.llm.layers)
++    n = len(layers)
++    print(f"[cpu-offload] installed on {n} decoder layers (frozen base in RAM)")
++
++    def make_pre(i):
++        def pre(module, args):
++            _offload_frozen(module, device)
++            if i + 1 < n:
++                _offload_frozen(layers[i + 1], device)  # prefetch next layer
++        return pre
++
++    def make_post(i):
++        def post(module, args, output):
++            # eval / no_grad path: nothing will need these weights again
++            if not module.training:
++                _offload_frozen(module, "cpu")
++        return post
++
++    def make_bwd(i):
++        def bwd(module, grad_input, grad_output):
++            # param grads of this layer are computed at this point
++            _offload_frozen(module, "cpu")
++        return bwd
++
++    for i, layer in enumerate(layers):
++        layer.register_forward_pre_hook(make_pre(i))
++        layer.register_forward_hook(make_post(i))
++        layer.register_full_backward_hook(make_bwd(i))
++
++
+ def _apply_lora(model: OmniVoice, config: TrainingConfig) -> OmniVoice:
+     """Wrap the model with PEFT LoRA adapters.
+ 
+@@ -229,7 +284,11 @@ def build_dataloaders(
+         collate_fn=collate_fn,
+         worker_init_fn=init_fn,
+         pin_memory=True,
+-        prefetch_factor=4,
++        **(
++            {"prefetch_factor": 4}
++            if config.num_workers > 0
++            else {}
++        ),
+     )
+ 
+     eval_loader = None
+@@ -252,10 +311,14 @@ def build_dataloaders(
+         eval_loader = DataLoader(
+             dev_dataset,
+             batch_size=None,  # Each item is already a collated batch
+-            num_workers=1,
++            num_workers=config.num_workers,
+             collate_fn=collate_fn,
+             pin_memory=True,
+-            prefetch_factor=2,
++            **(
++                {"prefetch_factor": 2}
++                if config.num_workers > 0
++                else {}
++            ),
+         )
+ 
+     return train_loader, eval_loader
+diff --git a/omnivoice/training/checkpoint.py b/omnivoice/training/checkpoint.py
+index 4bbf969..98ce37d 100644
+--- a/omnivoice/training/checkpoint.py
++++ b/omnivoice/training/checkpoint.py
+@@ -134,11 +134,20 @@ def save_checkpoint(
+ 
+     # 2. Save Model in HF format (config.json + pytorch_model.bin/safetensors)
+     unwrap_model = accelerator.unwrap_model(model)
+-    unwrap_model.save_pretrained(
+-        checkpoint_dir,
+-        is_main_process=accelerator.is_main_process,
+-        save_function=accelerator.save,
+-    )
++    try:
++        unwrap_model.save_pretrained(
++            checkpoint_dir,
++            is_main_process=accelerator.is_main_process,
++            save_function=accelerator.save,
++        )
++    except Exception as e:
++        # FSDP-unwrapped models may expose DTensor params that PEFT cannot
++        # serialize directly. The full model state is still saved above via
++        # accelerator.save_state (FULL_STATE_DICT); post-process it instead.
++        logger.warning(
++            f"save_pretrained failed ({e}); full model state remains "
++            f"available in {checkpoint_dir} via accelerator.save_state"
++        )
+ 
+     # 3. Save Tokenizer
+     if accelerator.is_main_process:
+diff --git a/omnivoice/training/trainer.py b/omnivoice/training/trainer.py
+index 9ea53e6..3195da7 100644
+--- a/omnivoice/training/trainer.py
++++ b/omnivoice/training/trainer.py
+@@ -97,6 +97,16 @@ class OmniTrainer:
+             self.lr_scheduler,
+         )
+ 
++        # CPU-offload mode: send frozen base weights back to RAM right after
++        # prepare() moved the whole model to GPU; per-layer hooks will stream
++        # them in/out during forward/backward.
++        if os.environ.get("OMNIVOICE_CPU_OFFLOAD", "false").lower() in ("1", "true", "yes"):
++            from omnivoice.training.builder import _offload_frozen
++
++            for layer in self.model.llm.layers:
++                _offload_frozen(layer, "cpu")
++            print("[cpu-offload] frozen base weights returned to RAM after prepare")
++
+         self.global_step = 0
+         self.epoch = 0
+ 

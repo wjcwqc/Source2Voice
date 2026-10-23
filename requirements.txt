@@ -1,0 +1,42 @@
+# Source2Voice 依赖清单
+#
+# 按环境拆分：训练环境 / ASR 环境 / 评估环境 / 发布。
+# 本文件是「汇总视图」，实际部署时按需装（见 README.md「环境准备」）。
+
+# ---------------------------------------------------------------- 通用
+numpy>=1.26,<2.0
+soundfile>=0.12
+scipy>=1.11
+
+# ---------------------------------------------------------------- 训练（OmniVoice）
+# torch 必须用官方 CUDA 源，镜像源的 torch 是 CPU 版：
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+torch>=2.8
+transformers>=5.0
+accelerate>=1.10
+peft>=0.21
+webdataset>=0.2
+hatchling          # OmniVoice 用 hatchling 构建
+editables          # pip install -e 必需
+audioop-lts; python_version >= "3.13"   # py3.13 移除了 audioop，pydub 依赖
+sentencepiece
+safetensors
+einops
+omegaconf
+
+# ---------------------------------------------------------------- ASR
+faster-whisper>=1.0
+ctranslate2>=4.0
+
+# ---------------------------------------------------------------- 评估
+zhconv              # 繁→简，CER 计算前必须做
+onnxruntime         # campplus 说话人嵌入
+pypinyin            # 拼音级专有名词匹配
+opencc-python-reimplemented   # 繁体检测
+
+# ---------------------------------------------------------------- 发布
+huggingface_hub>=0.25
+hf_transfer         # 装了这个上传快 200 倍（34MB/s vs 154KB/s）
+requests
+fastapi
+uvicorn

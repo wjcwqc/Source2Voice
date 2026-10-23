@@ -1,0 +1,12 @@
+{
+    "train": [
+        {
+            "manifest_path": ["D:/dwvits/data/omnivoice_dark_willow/tokens/train/data.lst"]
+        }
+    ],
+    "dev": [
+        {
+            "manifest_path": ["D:/dwvits/data/omnivoice_dark_willow/tokens/dev/data.lst"]
+        }
+    ]
+}

@@ -1,0 +1,41 @@
+{
+  "_comment": "英雄档案：Source2Voice 提取阶段的唯一配置源。换英雄只改这个文件。",
+
+  "hero_key": "dark_willow",
+  "display_name": "Dark Willow / 邪影芳灵 (Mireska)",
+  "asset_prefixes": ["helmet_sylph_", "sylph_"],
+
+  "groups": {
+    "vo": "sounds/vo/dark_willow/",
+    "announcer": "sounds/vo/announcer_dlc_dark_willow/",
+    "announcer_killing_spree": "sounds/vo/announcer_dlc_dark_willow_killing_spree/"
+  },
+
+  "subtitle_files": [
+    "resource/subtitles/subtitles_dark_willow_english.txt",
+    "resource/subtitles/subtitles_sylph_english.txt",
+    "resource/subtitles/subtitles_announcer_dlc_dark_willow_english.txt",
+    "resource/subtitles/subtitles_announcer_dlc_dark_willow_killing_spree_english.txt"
+  ],
+
+  "_token_rules_comment": "每个规则是一个模板；占位符 {stem}=完整文件名主干，{rest_<资产前缀去掉下划线>}=去掉该资产前缀后的主干。按顺序取第一个在字幕表中命中的候选。",
+  "token_rules": {
+    "vo": [
+      "dark_willow_{stem}",
+      "sylph_sylph_{rest_sylph}",
+      "sylph_sylph_{rest_helmet_sylph}"
+    ],
+    "announcer": [
+      "announcer_dlc_dark_willow_{stem}"
+    ],
+    "announcer_killing_spree": [
+      "announcer_dlc_dark_willow_killing_spree_{stem}"
+    ]
+  },
+
+  "languages": ["english", "schinese"],
+
+  "target_sr": 32000,
+  "target_channels": 1,
+  "target_sample_fmt": "pcm_s16le"
+}

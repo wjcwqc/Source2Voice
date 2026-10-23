@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+envs/
+
+# 数据与模型产物（体积大，不入库）
+data/
+exp/
+out/
+work/
+models/
+upload/
+*.safetensors
+*.bin
+*.tar
+*.onnx
+*.ckpt
+*.pth
+
+# 音频
+*.wav
+*.mp3
+*.vsnd_c
+
+# HF 缓存
+.cache/
+huggingface/
+
+# 日志
+*.log
+logs/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
