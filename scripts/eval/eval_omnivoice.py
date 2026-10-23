@@ -24,6 +24,18 @@ CER 越低越好；相似度要看**真人片段之间的互相相似度基线**
 
 --texts 是 JSON：{"t01": "第一句台词", ...}
 --real_dir + --real_glob 用于挑留出的真人片段（**不能出现在训练清单里**）。
+
+ASR 后端
+--------
+本脚本支持两种转写后端，按 `--asr_backend auto` 自动探测（优先 whisper，
+没有则用 faster_whisper）：
+
+  - `whisper`        : OpenAI whisper (`import whisper`)，包名 `openai-whisper`
+  - `faster_whisper` : faster-whisper (`from faster_whisper import WhisperModel`)
+
+两者都装不上时会给出明确的安装提示，而不是抛 ModuleNotFoundError。
+Windows 上 openai-whisper 依赖较重（含 numba/triton 链），faster-whisper
+通常更省事。
 """
 import argparse
 import glob as globmod
@@ -110,8 +122,85 @@ def load_audio_16k(path):
     return t.squeeze(0).numpy()
 
 
-def collect_real_clips(real_dir: str, real_glob: str, limit: int):
-    """挑留出的真人片段作为音色 ground truth。"""
+class OpenAIWhisperASR:
+    """OpenAI whisper 后端（包名 openai-whisper）。"""
+
+    name = "whisper"
+
+    def __init__(self, spec: str, lang: str):
+        import whisper
+
+        self.model = whisper.load_model(spec)
+        self.lang = lang
+
+    def transcribe(self, audio16k):
+        res = self.model.transcribe(audio16k, language=self.lang)
+        return res["text"]
+
+
+class FasterWhisperASR:
+    """faster-whisper 后端（CTranslate2，Windows 上更轻）。"""
+
+    name = "faster_whisper"
+
+    def __init__(self, spec: str, lang: str):
+        from faster_whisper import WhisperModel
+
+        # faster-whisper 的模型名与 openai whisper 基本一致（medium/small/...）
+        self.model = WhisperModel(spec, device="cpu", compute_type="int8")
+        # faster-whisper 用 "zh"/"en" 之外的完整语言名，这里统一成短码
+        self.lang = lang
+
+    def transcribe(self, audio16k):
+        segments, _info = self.model.transcribe(audio16k, language=self.lang)
+        return "".join(s.text for s in segments)
+
+
+def load_asr(backend: str, spec: str, lang: str):
+    """按 backend 选择 ASR 后端；auto = 先试 whisper，再试 faster_whisper。"""
+    order = ["whisper", "faster_whisper"] if backend == "auto" else [backend]
+    errors = []
+    for b in order:
+        try:
+            if b == "whisper":
+                return OpenAIWhisperASR(spec, lang)
+            if b == "faster_whisper":
+                return FasterWhisperASR(spec, lang)
+            raise ValueError("未知 ASR 后端: %s" % b)
+        except ImportError as e:
+            errors.append("%s: %s" % (b, e))
+    raise SystemExit(
+        "ERROR: 没有可用的 ASR 后端。\n  尝试过:\n    "
+        + "\n    ".join(errors)
+        + "\n  安装任一即可：\n"
+        "    pip install openai-whisper -i https://mirrors.aliyun.com/pypi/simple/\n"
+        "    pip install faster-whisper  -i https://mirrors.aliyun.com/pypi/simple/"
+    )
+
+
+def collect_real_clips(real_dir: str, real_glob: str, limit: int, real_list: str | None = None):
+    """挑留出的真人片段作为音色 ground truth。
+
+    两种来源：
+      - `real_list`：一个文本文件，每行一条 wav 绝对路径（可为空行/# 注释）。
+        **要复现历史报告数值时必须用它**——基线取决于选了哪几条片段，
+        glob 采样会挑到完全不同的片段，基线/spk-sim 都不可比。
+      - `real_dir` + `real_glob`：glob 后按步长均匀采样（limit=0 表示全取）。
+    """
+    if real_list:
+        paths = []
+        with open(real_list, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                paths.append(line)
+        missing = [p for p in paths if not os.path.exists(p)]
+        if missing:
+            print("WARN: 列表中 %d 个文件不存在（跳过）: %s" % (len(missing), missing[:3]))
+            paths = [p for p in paths if os.path.exists(p)]
+        return paths
+
     paths = sorted(globmod.glob(os.path.join(real_dir, real_glob)))
     if not paths:
         return []
@@ -126,16 +215,19 @@ def main():
     ap = argparse.ArgumentParser(description="Source2Voice · 阶段6a 量化评估")
     ap.add_argument("--ckpt_root", default=os.path.join(s2v_config.OUT_DIR, "omnivoice_paige"),
                     help="含 checkpoint-* 子目录的目录")
-    ap.add_argument("--real_dir", required=True, help="留出真人片段所在目录")
+    ap.add_argument("--real_dir", default=None, help="留出真人片段所在目录（配合 --real_glob 用）")
     ap.add_argument("--real_glob", default="*.wav", help="留出片段的 glob")
-    ap.add_argument("--real_limit", type=int, default=8, help="最多用多少条真人片段算基线")
+    ap.add_argument("--real_limit", type=int, default=8, help="最多用多少条真人片段算基线（real_list 存在时忽略）")
+    ap.add_argument("--real_list", default=None,
+                    help="真人片段清单文件（每行一条 wav 路径）。用于精确复现历史基线；给了它就忽略 --real_dir/--real_glob")
     ap.add_argument("--texts", required=True, help="评估文本 JSON：{tid: text}")
     ap.add_argument("--lang", default="en", help="en / zh（决定 whisper 转写语言与归一化方式）")
     ap.add_argument("--whisper", default="medium", help="whisper 模型规格")
+    ap.add_argument("--asr_backend", default="auto", choices=["auto", "whisper", "faster_whisper"],
+                    help="转写后端；auto=优先 whisper，失败回落 faster_whisper")
     a = ap.parse_args()
 
     import onnxruntime
-    import whisper
 
     norm = make_norm(a.lang)
 
@@ -145,16 +237,17 @@ def main():
         print("ERROR: 评估文本为空: %s" % a.texts, file=sys.stderr)
         raise SystemExit(2)
 
-    REAL_CLIPS = collect_real_clips(a.real_dir, a.real_glob, a.real_limit)
+    REAL_CLIPS = collect_real_clips(a.real_dir or "", a.real_glob, a.real_limit, a.real_list)
     if not REAL_CLIPS:
-        print("ERROR: 在 %s 下没找到真人片段（glob=%s）" % (a.real_dir, a.real_glob), file=sys.stderr)
+        print("ERROR: 没找到真人片段（--real_list=%s --real_dir=%s glob=%s）"
+              % (a.real_list, a.real_dir, a.real_glob), file=sys.stderr)
         raise SystemExit(2)
 
     so = onnxruntime.SessionOptions()
     so.intra_op_num_threads = 4
     session = onnxruntime.InferenceSession(BASE, sess_options=so, providers=["CPUExecutionProvider"])
-    print("loading whisper %s ..." % a.whisper)
-    model = whisper.load_model(a.whisper)
+    asr = load_asr(a.asr_backend, a.whisper, a.lang)
+    print("ASR backend: %s (%s)" % (asr.name, a.whisper))
 
     real_embs = [spk_embed(p, session) for p in REAL_CLIPS]
     # sanity: same-speaker ceiling across real clips
@@ -176,14 +269,14 @@ def main():
                 if not os.path.exists(wav_path):
                     continue
                 audio = load_audio_16k(wav_path)
-                res = model.transcribe(audio, language=a.lang)
-                hyp = norm(res["text"])
+                hyp_text = asr.transcribe(audio)
+                hyp = norm(hyp_text)
                 c = cer(hyp, norm(text))
                 cers.append(c)
                 emb = spk_embed(wav_path, session)
                 s = np.mean([cos(emb, r) for r in real_embs])
                 sims.append(s)
-                print(f"{ckpt}/{mode} {tid}: cer={c:.3f} sim={s:.4f} hyp='{res['text'][:40]}'")
+                print(f"{ckpt}/{mode} {tid}: cer={c:.3f} sim={s:.4f} hyp='{hyp_text[:40]}'")
             if cers:
                 rows.append((ckpt, mode, float(np.mean(cers)), float(np.mean(sims))))
 

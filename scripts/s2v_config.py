@@ -104,6 +104,32 @@ CAMPPLUS = os.environ.get(
     "S2V_CAMPPLUS", os.path.join(ROOT, "models", "campplus.onnx")
 )
 
+
+def _resolve_campplus() -> str:
+    """定位 campplus.onnx（说话人相似度用）。
+
+    优先级：
+      1. 环境变量 S2V_CAMPPLUS
+      2. $ROOT/models/campplus.onnx
+      3. $ROOT/models 下任意一层子目录里的 campplus.onnx
+         （CosyVoice 发行包里它放在 models/cosyvoice/<model>/campplus.onnx）
+    """
+    env = os.environ.get("S2V_CAMPPLUS")
+    if env:
+        return env
+    direct = os.path.join(ROOT, "models", "campplus.onnx")
+    if os.path.exists(direct):
+        return direct
+    models_dir = os.path.join(ROOT, "models")
+    if os.path.isdir(models_dir):
+        for dirpath, _dirnames, filenames in os.walk(models_dir):
+            if "campplus.onnx" in filenames:
+                return os.path.join(dirpath, "campplus.onnx")
+    return direct
+
+
+CAMPPLUS = _resolve_campplus()
+
 # ---------------------------------------------------------------- 训练产物
 EXP_DIR = os.path.join(WORK, "exp")
 OUT_DIR = os.path.join(WORK, "out")
