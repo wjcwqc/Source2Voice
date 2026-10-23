@@ -70,6 +70,23 @@ Dota 2 邪影芳灵（中文）与 Deadlock Paige / Violet（英文）两个完�
     开了 30+MB/s。**代理要从 Windows 注册表读**，别手写端口号。
 14. **多英雄并行跑 pipeline 会互相覆盖 manifest**。已修为按
     `manifest_<hero_key>.json` 分开存储 + 自动合并去重。
+15. **评估基线必须用 `--real_list` 固定留出片段**，不要用 glob 采样。
+    真人基线取决于选了哪几条片段 —— glob 一变，基线从 0.644 变 0.339，
+    历史报告全部不可比。清单还必须**验证与训练集零重叠**。
+16. **官方 `merge_lora` 的参数名是 `--lora_adapter` / `--output_dir`**，
+    不是 `--adapter` / `--output`。传错会静默回退到备用脚本。
+    改之前先 `grep add_argument <OmniVoice>/omnivoice/cli/merge_lora.py`。
+17. **OmniVoice 的 tokenizer 是扁平文件**（`tokenizer.json` +
+    `tokenizer_config.json` + `chat_template.jinja`），**不是目录**。
+    校验产物时判目录会永远报「缺失」。
+18. **zhconv 可能压根没装**，`make_norm()` 里的 `except ImportError: pass`
+    会静默跳过繁转简，让中文 CER 虚高 2–3 倍（实测 0.202 vs 0.000）。
+    中文评估前先 `python -c "import zhconv"` 确认。
+19. **长任务要配守护脚本**（`scripts/auto/`）。判活**看训练日志 mtime**，
+    不要用 `ps -ef | grep` —— Git Bash 下 `ps` 输出可能含二进制字符，
+    grep 匹配不可靠。
+20. **训练期间别跑重活**。`OMNIVOICE_CPU_OFFLOAD=1` 的逐层 offload 依赖
+    CPU 供数，并行跑评估会让单步从 28 s 涨到 58 s。
 
 ## 目录结构
 
@@ -90,15 +107,17 @@ Source2Voice/
 │   ├── clean/                阶段 3
 │   ├── train/                阶段 4-5
 │   ├── eval/                 阶段 6
-│   └── publish/              阶段 7
+│   ├── publish/              阶段 7
+│   └── auto/                 多英雄自动化（守护脚本 + 流水线模板）
 ├── references/
-│   ├── WORKFLOW.md           通用工作流 + 各游戏差异
+│   ├── WORKFLOW.md           通用工作流 + 各游戏差异 + 自动化章节
 │   ├── REQUIREMENTS.md       硬件/时间/算力要求（实测）
 │   └── TROUBLESHOOTING.md    全部已知坑与解法
 ├── patches/                  OmniVoice 低显存训练补丁
 └── examples/
     ├── dark_willow/          邪影芳灵完整实战记录（REPORT.md）
-    └── deadlock_paige/       Paige 完整实战记录
+    ├── deadlock_paige/       Paige 完整实战记录
+    └── deadlock_violet/      Violet 完整实战记录
 ```
 
 ## 快速开始
@@ -128,3 +147,8 @@ python scripts/s2v_config.py       # 打印所有路径 + 检查项
 - **不要跳过阶段 3 的体检**。文本脏了，模型学到的就是脏发音，后面所有阶段都白做。
 - **训练前先跑 `--steps 20` 的 smoke test**，确认 offload 通路正常再上完整配置。
 - **一个 GPU 只能同时训一个音色**。多英雄排队，不要并发。
+- **多英雄用 `scripts/auto/` 串起来跑**，别手动盯。训练结束后自动接合并/评估/上传。
+- **评估前先确认环境**：`onnxruntime` + ASR 后端（whisper 或 faster-whisper）
+  + 中文还要 `zhconv`，三者缺一都会让评估结果失真或直接报错。
+- **官方 CLI 的参数签名要先看一眼再写**。`grep -n add_argument <脚本路径>`，
+  参数名猜错会让 argparse 静默失败并走回退分支。
