@@ -194,15 +194,17 @@ Source2Voice/
 │   ├── clean/                  阶段 3：体检、子集筛选、文本纠错、响度分桶
 │   ├── train/                  阶段 4-5：JSONL、tokenize、data_config、训练、合并
 │   ├── eval/                   阶段 6：推理冒烟、CER + 说话人相似度评估
-│   └── publish/                阶段 7：合并校验、暂存目录、HF 上传、HTTP 推理服务
+│   ├── publish/                阶段 7：合并校验、暂存目录、HF 上传、HTTP 推理服务
+│   └── auto/                   多英雄自动化：守护脚本 + 流水线模板
 ├── references/
-│   ├── WORKFLOW.md             通用工作流 + 各游戏差异
+│   ├── WORKFLOW.md             通用工作流 + 各游戏差异 + 自动化章节
 │   ├── REQUIREMENTS.md         硬件 / 时间 / 算力要求（实测数据）
 │   └── TROUBLESHOOTING.md      全部已知坑与解法
 ├── patches/                    OmniVoice 低显存训练补丁
 └── examples/
     ├── dark_willow/            邪影芳灵完整实战记录
-    └── deadlock_paige/         Paige 完整实战记录
+    ├── deadlock_paige/         Paige 完整实战记录
+    └── deadlock_violet/        Violet 完整实战记录
 ```
 
 ---
@@ -224,7 +226,12 @@ Source2Voice/
 | 4 GB 显存 OOM | 逐层 CPU offload（内存当显存） |
 | Windows 无 NCCL → FSDP 不可用 | 单进程 + 自研 offload |
 | PEFT 键名带 `.default` 导致合并失效 | 用官方 `merge_lora` CLI |
-| CER 虚高 | whisper 输出繁体 → CER 前 `zhconv` 转简体 |
+| CER 虚高 | whisper 输出繁体 → CER 前 `zhconv` 转简体（**装不上会静默虚高 2–3 倍**） |
+| 官方 `merge_lora` 参数名是 `--lora_adapter`/`--output_dir` | 传错会静默走回退分支 |
+| OmniVoice 的 tokenizer 是扁平文件不是目录 | 校验产物时判目录会永远报「缺失」 |
+| 评估基线换台机器就对不上 | 用 `--real_list` 固定留出片段，不用 glob 采样 |
+| campplus.onnx 找不到 | `s2v_config` 在 `$ROOT/models` 下递归查找 |
+| 长任务没人盯 | `scripts/auto/` 守护脚本（判活看**日志 mtime**，别用 `ps\|grep`） |
 | HF 上传 150 KB/s | 装 `hf_transfer`（**34 MB/s**） |
 | 代理端口猜错连不上 HF | 从 Windows 注册表读 `ProxyServer` |
 
