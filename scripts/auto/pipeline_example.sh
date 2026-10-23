@@ -116,6 +116,7 @@ PY
     --texts "$evals" --lang en || echo "WARN: 评估失败"
 
   step "=== $hero : 暂存 + 上传 HF ==="
+  # --clean：清空暂存目录重建，避免上一轮残留的文件混进上传内容
   "$PY_DATA" "$REPO/scripts/publish/stage_hf.py" --hero "$hero" \
     --merged "$merged" \
     --lora "$exp/checkpoint-600" \
@@ -124,6 +125,7 @@ PY
     --dataset_root "$data" \
     --audio_root "$ROOT/data/${dataset_name}/core" \
     --stage "$stage" \
+    --clean \
     --model_card "$REPO/examples/deadlock_${hero}/HF_MODEL_CARD.md" || return 1
 
   # 上传必须联网：huggingface_hub 在 HF_HUB_OFFLINE=1 下会拦截**所有** HTTP 请求
