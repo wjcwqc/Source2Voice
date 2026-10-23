@@ -194,7 +194,7 @@ Source2Voice/
 │   ├── clean/                  阶段 3：体检、子集筛选、文本纠错、响度分桶
 │   ├── train/                  阶段 4-5：JSONL、tokenize、data_config、训练、合并
 │   ├── eval/                   阶段 6：推理冒烟、CER + 说话人相似度评估
-│   └── publish/                阶段 7：HF 上传、HTTP 推理服务
+│   └── publish/                阶段 7：合并校验、暂存目录、HF 上传、HTTP 推理服务
 ├── references/
 │   ├── WORKFLOW.md             通用工作流 + 各游戏差异
 │   ├── REQUIREMENTS.md         硬件 / 时间 / 算力要求（实测数据）

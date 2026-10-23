@@ -103,6 +103,29 @@ def upload(api, repo_type: str, repo_id: str, folder: str, message: str) -> str:
     return r
 
 
+def read_cached_token() -> str | None:
+    """从 HF 缓存目录读已登录的 token（hf_hub 登录后写在磁盘上）。
+
+    优先用环境变量 HF_TOKEN / HUGGINGFACE_HUB_TOKEN；
+    没有时读 ~/.cache/huggingface/token（Windows: %USERPROFILE%\\.cache\\huggingface\\token）。
+    """
+    for k in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        v = os.environ.get(k)
+        if v:
+            return v.strip()
+    home = os.path.expanduser("~")
+    for p in (os.path.join(home, ".cache", "huggingface", "token"),
+              os.path.join(home, ".huggingface", "token")):
+        try:
+            with open(p, encoding="utf-8") as f:
+                t = f.read().strip()
+            if t:
+                return t
+        except OSError:
+            continue
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="Source2Voice · 阶段7 上传到 HuggingFace")
     ap.add_argument("--model_repo", help="模型仓库 id，如 user/MyVoice")
@@ -122,10 +145,12 @@ def main():
     if a.endpoint:
         os.environ["HF_ENDPOINT"] = a.endpoint
 
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    token = read_cached_token()
     if not token:
-        print("ERROR: 未找到 HF_TOKEN，请先 export HF_TOKEN=hf_xxx", file=sys.stderr)
+        print("ERROR: 未找到 HF_TOKEN。请 export HF_TOKEN=hf_xxx，"
+              "或先运行 `huggingface-cli login`", file=sys.stderr)
         raise SystemExit(2)
+    print("[auth] token OK (len=%d)" % len(token))
 
     try:
         import hf_transfer  # noqa: F401

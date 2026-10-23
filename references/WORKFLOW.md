@@ -488,6 +488,14 @@ python -m omnivoice.cli.merge_lora \
     --output "$S2V_WORK/exp/omnivoice_<hero>_merged"
 ```
 
+或者用带校验的封装脚本（自动回退到备用实现 + 检查产物完整性）：
+
+```bash
+python scripts/publish/merge_and_verify.py --hero <hero> \
+    --adapter "$S2V_WORK/exp/omnivoice_<hero>_lora/checkpoint-600" \
+    --output  "$S2V_WORK/exp/omnivoice_<hero>_merged"
+```
+
 备用（本仓库 `scripts/train/merge_lora.py`）：
 ```bash
 python scripts/train/merge_lora.py \
@@ -505,18 +513,36 @@ python scripts/publish/omnivoice_server.py --model "$S2V_WORK/exp/omnivoice_<her
 
 ### 6.5 上传 HuggingFace
 
-先在本地整理暂存目录：
+先在本地整理暂存目录（`scripts/publish/stage_hf.py` 会做这件事）：
+
+```bash
+python scripts/publish/stage_hf.py --hero <hero> \
+    --merged   "$S2V_WORK/exp/omnivoice_<hero>_merged" \
+    --lora     "$S2V_WORK/exp/omnivoice_<hero>_lora/checkpoint-600" \
+    --trainlog "$S2V_WORK/exp/omnivoice_<hero>_lora/train.log" \
+    --train_config "$REPO/configs/train_config_lora.json" \
+    --dataset_root "$S2V_WORK/data/omnivoice_<hero>" \
+    --audio_root  "<清洗后音频根目录，含 wavs/>" \
+    --stage    "$S2V_WORK/stage/<hero>" \
+    --model_card   examples/<hero>/HF_MODEL_CARD.md \
+    --dataset_card examples/<hero>/HF_DATASET_CARD.md
+```
+
+产出结构：
 ```
 <stage>/model/
   merged/          合并模型 + audio_tokenizer + tokenizer + config
   lora/            adapter_config.json + adapter_model.safetensors
-  training/        训练配置 + 数据准备脚本 + train.log
+  training/        训练配置 + data_config + train.log
   README.md        模型卡
 <stage>/dataset/
-  audio/           全部 wav
-  metadata/        .list + train/dev jsonl
-  README.md
+  audio/wavs/      全部 wav（+ Kaldi 桶文件）
+  metadata/        .list + train/dev jsonl + summary.json
+  README.md        数据集卡
 ```
+
+> **数据集可以先于模型上传** —— 数据集不依赖训练结果，
+> 训练还在跑的时候就能先把数据集传上去。
 
 然后：
 
@@ -532,6 +558,7 @@ python scripts/publish/upload_hf.py \
 
 脚本会**自动探测 Windows 系统代理**（读注册表 `ProxyServer`），
 不用手写端口。也可以 `--proxy http://127.0.0.1:xxxx` 显式指定。
+token 优先读环境变量，没有则读 HF 缓存里的 `~/.cache/huggingface/token`。
 
 **✅ 验收**：
 1. 两个仓库都能打开，文件数正确
