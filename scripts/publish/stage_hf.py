@@ -81,6 +81,7 @@ def main():
     ap.add_argument("--stage", required=True, help="暂存根目录")
     ap.add_argument("--model_card", default=None, help="模型卡 Markdown")
     ap.add_argument("--dataset_card", default=None, help="数据集卡 Markdown")
+    ap.add_argument("--report", default=None, help="训练与评估报告 Markdown（放进 model/ 根目录）")
     ap.add_argument("--clean", action="store_true", help="清空暂存目录后重建")
     a = ap.parse_args()
 
@@ -145,6 +146,11 @@ def main():
         if card and os.path.exists(card):
             shutil.copy2(card, target)
             print("card               : %s" % os.path.basename(target))
+    # 报告也放进模型仓根目录（与 wjcwqc/MireskaVoice 的结构保持一致：
+    # README.md 是模型卡，REPORT.md 是训练与评估实测记录）
+    if a.report and os.path.exists(a.report):
+        shutil.copy2(a.report, os.path.join(mdir, "REPORT.md"))
+        print("report             : REPORT.md")
 
     # ---------------- 摘要 ----------------
     summary = {

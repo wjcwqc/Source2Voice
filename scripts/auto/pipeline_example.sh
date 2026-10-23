@@ -110,10 +110,20 @@ PY
   done
 
   step "=== $hero : 量化评估 ==="
+  local evaljson="$WORK/eval/${hero}_eval.json"
   "$PY_DATA" "$REPO/scripts/eval/eval_omnivoice.py" \
     --ckpt_root "$outdir" \
     --real_list "$reallist" \
-    --texts "$evals" --lang en || echo "WARN: 评估失败"
+    --texts "$evals" --lang en \
+    --json_out "$evaljson" || echo "WARN: 评估失败"
+
+  # 把实测结果填进 REPORT.md 的占位符（放在暂存之前，
+  # 这样上传到 HF 仓库根目录的 REPORT.md 就是带实测数据的最终版）
+  "$PY_DATA" "$REPO/scripts/publish/fill_report.py" \
+    --eval_json "$evaljson" \
+    --report "$REPO/examples/deadlock_${hero}/REPORT.md" \
+    --hero "$display" \
+    --backup || echo "WARN: 报告填充失败"
 
   step "=== $hero : 暂存 + 上传 HF ==="
   # --clean：清空暂存目录重建，避免上一轮残留的文件混进上传内容
@@ -126,7 +136,8 @@ PY
     --audio_root "$ROOT/data/${dataset_name}/core" \
     --stage "$stage" \
     --clean \
-    --model_card "$REPO/examples/deadlock_${hero}/HF_MODEL_CARD.md" || return 1
+    --model_card "$REPO/examples/deadlock_${hero}/HF_MODEL_CARD.md" \
+    --report "$REPO/examples/deadlock_${hero}/REPORT.md" || return 1
 
   # 上传必须联网：huggingface_hub 在 HF_HUB_OFFLINE=1 下会拦截**所有** HTTP 请求
   # （utils/_http.py 的 hf_request_event_hook），create_repo / upload_folder 会直接抛

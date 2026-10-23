@@ -225,6 +225,8 @@ def main():
     ap.add_argument("--whisper", default="medium", help="whisper 模型规格")
     ap.add_argument("--asr_backend", default="auto", choices=["auto", "whisper", "faster_whisper"],
                     help="转写后端；auto=优先 whisper，失败回落 faster_whisper")
+    ap.add_argument("--json_out", default=None,
+                    help="把评估结果写成 JSON（含 baseline / 各 ckpt 的 CER 与 spk-sim），供报告生成使用")
     a = ap.parse_args()
 
     import onnxruntime
@@ -288,6 +290,26 @@ def main():
     if rows:
         best = max(rows, key=lambda r: r[3])
         print(f"\n最佳 spk-sim: {best[0]} / {best[1]} = {best[3]:.4f} (真人基线 {baseline:.4f})")
+
+    if a.json_out:
+        payload = {
+            "lang": a.lang,
+            "asr_backend": asr.name,
+            "whisper": a.whisper,
+            "n_texts": len(TEXTS),
+            "baseline": baseline,
+            "n_real_clips": len(REAL_CLIPS),
+            "rows": [{"ckpt": ck, "mode": m, "cer": c, "spk_sim": s,
+                      "vs_baseline": s - baseline} for ck, m, c, s in rows],
+        }
+        if rows:
+            best = max(rows, key=lambda r: r[3])
+            payload["best"] = {"ckpt": best[0], "mode": best[1],
+                               "spk_sim": best[3], "cer": best[2]}
+        os.makedirs(os.path.dirname(os.path.abspath(a.json_out)), exist_ok=True)
+        with open(a.json_out, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print("\n[json] 结果已写入 %s" % a.json_out)
 
 
 if __name__ == "__main__":

@@ -78,11 +78,10 @@ bookworm_spawn_01.vsnd_c  →  token "bookworm_spawn_01_hero_3d"
 | save_steps / eval_steps | 150 / 150 |
 | `OMNIVOICE_CPU_OFFLOAD` | **1**（4 GB 显存的关键：冻结权重常驻内存逐层流转 GPU） |
 
-单步耗时 **26–30 s**（RTX 3050 Ti 4 GB），与 Dota 2 那轮几乎一致。
+单步耗时 **约 30 s**（RTX 3050 Ti 4 GB），与 Dota 2 那轮几乎一致。
+600 步总耗时约 **5 h 10 min**。
 
 ## 训练结果
-
-> 待训练完成后补入（checkpoint-300 / 450 / 600 的 CER 与 spk-sim）。
 
 <!-- TRAINING_RESULTS -->
 
