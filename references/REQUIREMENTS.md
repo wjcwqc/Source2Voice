@@ -63,6 +63,21 @@ LoRA + audio_embeddings/heads   ← 常驻 VRAM
 > 本项目 904 条数据只有 0.8 小时，batch 太大会导致 epoch 太少、
 > 有效训练量反而下降。显存富裕优先**多存 checkpoint**（save_steps 调小到 75）。
 
+### 训练期间不要跑重活（实测）
+
+`OMNIVOICE_CPU_OFFLOAD=1` 的逐层 offload 依赖 **CPU 持续供数**，
+所以训练期间并行跑评估/推理会直接拖慢训练：
+
+| 训练期间在做什么 | 单步耗时 |
+|---|---|
+| 什么都不做 | **28–31 s** |
+| 并行跑 whisper medium 评估 | **58 s**（慢 87%） |
+
+> 实测：跑一轮 Dark Willow 回归评估（whisper medium，CPU int8），
+> 训练单步从 28.5 s 涨到 57.9 s。
+> **训练期间只做轻活**（改文档、准备清单、写评估 JSON），
+> 评估/推理/合并全部等训练结束。
+
 ---
 
 ## 各阶段耗时（实测）
@@ -183,11 +198,34 @@ torch（CPU 版即可）
 ### Python 评估环境
 
 ```
-faster-whisper     # CER 用的转写
-zhconv             # 繁→简，CER 前必须做
 onnxruntime        # campplus 说话人嵌入
 soundfile, numpy, scipy
+zhconv             # 繁→简，CER 前必须做（英文数据集不需要）
+# ASR 后端二选一，评估脚本自动探测：
+openai-whisper     # pip install openai-whisper
+# 或
+faster-whisper     # pip install faster-whisper
 ```
+
+> ⚠️ **zhconv 是可选依赖**，`make_norm()` 里 `except ImportError: pass`
+> 静默跳过。缺它时 whisper 输出的繁体全部保留，中文 CER 虚高 2–3 倍
+> （实测同一份产物：缺 zhconv 0.202，装上 0.000）。
+> 中文评估前先 `python -c "import zhconv"` 确认。
+
+### 三个 venv 的分工（本项目实测）
+
+| venv | 关键包 | 用途 |
+|---|---|---|
+| `envs/omnivoice` | torch + **huggingface_hub** + hf_transfer | 训练、**推理**（要 `import omnivoice`）、**HF 上传** |
+| `envs/train` | torch + **scipy** + onnxruntime + whisper + zhconv | 数据准备、**评估** |
+| `envs/asr` | faster-whisper | ASR（仅「缺官方字幕」的语言需要） |
+
+> `huggingface_hub` 只装在 `envs/omnivoice` 与 `envs/asr`；
+> `scipy` 只装在 `envs/train`（`envs/omnivoice` 没有）。
+> **上传用 `envs/omnivoice`，评估用 `envs/train`，别混。**
+>
+> 推理（`test_infer.py`）需要 `import omnivoice.*`，
+> 所以要用 `envs/omnivoice` 并设 `PYTHONPATH=<OmniVoice 源码目录>`。
 
 ---
 
