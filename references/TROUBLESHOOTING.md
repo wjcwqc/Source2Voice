@@ -338,6 +338,31 @@ python scripts/eval/eval_omnivoice.py \
 **解法**：日常使用**推荐纯文本模式**（音色已内化进参数）。
 评估时两个模式都要测 —— noref 相似度才说明音色真的学进去了。
 
+### 合并后校验报 `tokenizer/ 缺失`，但模型其实是好的
+**症状**：`merge_and_verify.py` 明明合并成功，却打印 `tokenizer/ 缺失`。
+**原因**：OmniVoice 的 tokenizer 是**扁平文件**（`tokenizer.json` +
+`tokenizer_config.json` + `chat_template.jinja`），不是目录。
+校验只判了 `tokenizer/` 目录，于是永远报缺失。
+**解法**：校验清单已改为逐个文件判断，同时保留 `audio_tokenizer/` 目录检查。
+
+### 合并脚本一直走回退分支
+**症状**：日志里官方 `merge_lora` 失败，紧接着回退到 `merge_lora.py`。
+**原因**：官方 CLI 的参数名是 **`--lora_adapter` / `--output_dir`**，
+不是 `--adapter` / `--output`。传错名字 argparse 直接退出非零。
+**解法**：`merge_and_verify.py` 已按官方签名传参。改这个脚本前
+务必先看一眼目标仓库的 CLI 定义：
+
+```bash
+grep -n "add_argument" <OmniVoice源码>/omnivoice/cli/merge_lora.py
+```
+
+### 长任务没有守护进程，训练完就停在那儿
+**症状**：训练跑完 5 小时，后面合并/评估/上传全靠人手动触发。
+**解法**：用「等待 + 串行执行」的守护脚本（见 `references/` 里的思路）。
+存活性判定**不要用 `ps -ef | grep`**——Git Bash 下 `ps` 输出可能含二进制
+字符，`grep` 匹配行为不可靠；改看**日志 mtime**：训练每步都写日志，
+停更 10 分钟即判定训练已死。
+
 ---
 
 ## 发布阶段

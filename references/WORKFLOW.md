@@ -520,10 +520,15 @@ PY
 
 ```bash
 python -m omnivoice.cli.merge_lora \
-    --base_model "$S2V_MODEL" \
-    --adapter "$S2V_WORK/exp/omnivoice_<hero>_lora/checkpoint-600" \
-    --output "$S2V_WORK/exp/omnivoice_<hero>_merged"
+    --base_model   "$S2V_MODEL" \
+    --lora_adapter "$S2V_WORK/exp/omnivoice_<hero>_lora/checkpoint-600" \
+    --output_dir   "$S2V_WORK/exp/omnivoice_<hero>_merged"
 ```
+
+> ⚠️ 官方 CLI 的参数名是 **`--lora_adapter` / `--output_dir`**，
+> 不是 `--adapter` / `--output`。写错会让 argparse 直接退出非零，
+> 于是每次都静默回退到备用脚本。改这个命令前先确认签名：
+> `grep -n "add_argument" <OmniVoice源码>/omnivoice/cli/merge_lora.py`
 
 或者用带校验的封装脚本（自动回退到备用实现 + 检查产物完整性）：
 
@@ -532,6 +537,10 @@ python scripts/publish/merge_and_verify.py --hero <hero> \
     --adapter "$S2V_WORK/exp/omnivoice_<hero>_lora/checkpoint-600" \
     --output  "$S2V_WORK/exp/omnivoice_<hero>_merged"
 ```
+
+> 校验会检查 `config.json` / `tokenizer.json` / `tokenizer_config.json` /
+> `chat_template.jinja` / `*.safetensors` / `audio_tokenizer/`。
+> 注意 tokenizer 是**扁平文件**而不是目录 —— 判目录会永远报「缺失」。
 
 备用（本仓库 `scripts/train/merge_lora.py`）：
 ```bash
@@ -611,3 +620,102 @@ token 优先读环境变量，没有则读 HF 缓存里的 `~/.cache/huggingface
 把训练配置、loss 曲线、评估表、生成样本清单写成 REPORT.md / MANIFEST.md，
 一起放进 HF 仓库。参考 `examples/dark_willow/REPORT.md` 与
 `examples/deadlock_paige/REPORT.md`。
+
+---
+
+## 附 · 多英雄自动化（强烈建议）
+
+单英雄流程是「训练 5 h → 合并 → 评估 → 上传」，多英雄要串行跑 ~12 h。
+**不要手动盯着**，写一个守护脚本串起来。
+
+### 附.1 三层结构
+
+```
+wait_and_run.sh      守护：等训练产出 → 调 pipeline
+  └── pipeline.sh    业务：训练 → 合并 → 推理 → 评估 → 暂存 → 上传（每位英雄一遍）
+        └── <脚本>   能力：stage_hf.py / merge_and_verify.py / upload_hf.py / eval_omnivoice.py
+```
+
+### 附.2 pipeline.sh 要点
+
+```bash
+run_hero () {
+  local hero="$1" display="$2"
+  local exp="$EXP/omnivoice_deadlock_${hero}_lora"
+  local merged="$EXP/omnivoice_deadlock_${hero}_merged"
+
+  # 1) 训练（已存在 checkpoint 就跳过 —— 便于断点续跑）
+  if [ -d "$exp/checkpoint-600" ]; then
+    echo "已存在 checkpoint-600，跳过训练"
+  else
+    S2V_EXP="$exp" S2V_DATA="$data" bash scripts/train/run_train.sh ...
+  fi
+
+  # 2) 合并 + 校验
+  python scripts/publish/merge_and_verify.py --hero "$hero" \
+      --base_model "$MODEL" --adapter "$exp/checkpoint-600" --output "$merged" || return 1
+
+  # 3) 推理冒烟：每个 checkpoint 都出 ref + noref
+  for ck in checkpoint-300 checkpoint-450 checkpoint-600; do
+    [ -d "$exp/$ck" ] || continue
+    python scripts/eval/test_infer.py --lora_adapter "$exp/$ck" \
+        --out_dir "$outdir/$ck" --texts "$evals" --lang en \
+        --ref_audio "$ref" --ref_text "$reftxt"
+  done
+
+  # 4) 量化评估（用 --real_list 固定基线口径）
+  python scripts/eval/eval_omnivoice.py --ckpt_root "$outdir" \
+      --real_list "$reallist" --texts "$evals" --lang en
+
+  # 5) 暂存 + 上传
+  python scripts/publish/stage_hf.py --hero "$hero" ...
+  python scripts/publish/upload_hf.py --model_repo "wjcwqc/${display}Voice" \
+      --model_dir "$stage/model" --message "..."
+}
+
+run_hero paige  Paige
+run_hero violet Violet
+```
+
+### 附.3 环境分工（一张卡 + 三个环境）
+
+| 环境 | 装了什么 | 用途 |
+|---|---|---|
+| `envs/omnivoice` | torch + **huggingface_hub** + hf_transfer | **训练**、**推理**、**HF 上传** |
+| `envs/train` | torch + **scipy** + onnxruntime + whisper + zhconv | 数据准备、**评估** |
+| `envs/asr` | faster-whisper | ASR（仅 Dota 2 中文需要） |
+
+> `test_infer.py` 要 `import omnivoice.*` → 用 `envs/omnivoice` + `PYTHONPATH`；
+> `eval_omnivoice.py` 要 onnxruntime + whisper → 用 `envs/train`。
+> **两个环境都需要的脚本不能混用。**
+
+### 附.4 守护脚本的存活性判定
+
+```bash
+while [ ! -d "$CKPT_DIR" ]; do
+  NOW=$(date +%s)
+  MT=$(stat -c %Y "$TRAIN_LOG" 2>/dev/null || echo 0)
+  AGE=$((NOW - MT))
+  if [ "$AGE" -gt 600 ]; then      # 日志停更 10 分钟 => 训练已死
+    echo "训练失败"; tail -n 40 "$TRAIN_LOG"; exit 1
+  fi
+  sleep 60
+done
+```
+
+> ⚠️ **不要用 `ps -ef | grep "omnivoice.cli.train"` 判活**：
+> Git Bash 下 `ps` 输出可能含二进制字符，`grep` 匹配行为不可靠
+> （实测输出 `Binary file (standard input) matches`）。
+> **看日志 mtime 最稳** —— 训练每步都写日志。
+
+### 附.5 并行时的资源竞争
+
+在训练期间跑评估/推理会抢 CPU，导致训练单步耗时从 28 s 涨到 58 s
+（`OMNIVOICE_CPU_OFFLOAD=1` 的逐层 offload 依赖 CPU 供数）。
+**训练期间只做轻活**（改文档、准备清单），重活等训练结束。
+
+### ✅ 验收
+
+1. `pipeline.log` 里每位英雄都有 `MERGE_OK` + `real clips` 基线行
+2. `ALL_UPLOADS_COMPLETE` 出现在日志末尾
+3. HF 仓库能反向下载
