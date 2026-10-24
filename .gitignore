@@ -33,6 +33,9 @@ huggingface/
 *.log
 logs/
 
+# 报告/模型卡的改写前备份（fill_report.py --backup 生成）
+*.bak
+
 # 编辑器
 .vscode/
 .idea/

@@ -632,7 +632,7 @@ token 优先读环境变量，没有则读 HF 缓存里的 `~/.cache/huggingface
 
 ```
 wait_and_run.sh      守护：等训练产出 → 调 pipeline
-  └── pipeline.sh    业务：训练 → 合并 → 推理 → 评估 → 暂存 → 上传（每位英雄一遍）
+  └── pipeline.sh    业务：训练 → 合并 → 推理 → 评估 → 回填报告 → 暂存 → 上传 → 提交推送（每位英雄一遍）
         └── <脚本>   能力：stage_hf.py / merge_and_verify.py / upload_hf.py / eval_omnivoice.py
 ```
 
@@ -663,14 +663,30 @@ run_hero () {
         --ref_audio "$ref" --ref_text "$reftxt"
   done
 
-  # 4) 量化评估（用 --real_list 固定基线口径）
+  # 4) 量化评估（用 --real_list 固定基线口径，结果落 JSON 供回填报告）
   python scripts/eval/eval_omnivoice.py --ckpt_root "$outdir" \
-      --real_list "$reallist" --texts "$evals" --lang en
+      --real_list "$reallist" --texts "$evals" --lang en \
+      --json_out "$WORK/eval/${hero}_eval.json"
 
-  # 5) 暂存 + 上传
-  python scripts/publish/stage_hf.py --hero "$hero" ...
-  python scripts/publish/upload_hf.py --model_repo "wjcwqc/${display}Voice" \
+  # 5) 训练耗时**实测** + 回填 REPORT / 模型卡（占位符 -> 实测表）
+  #    放在暂存之前，这样上传到 HF 仓库根的 REPORT.md 就是带实测数据的最终版
+  t_dur=$(python scripts/publish/train_time.py --exp_dir "$exp" --steps 600 --target duration)
+  python scripts/publish/fill_report.py \
+      --eval_json "$WORK/eval/${hero}_eval.json" \
+      --report "examples/deadlock_${hero}/REPORT.md" \
+      --hero "$display" --train_time "$t_dur" \
+      --model_card "examples/deadlock_${hero}/HF_MODEL_CARD.md" --backup
+
+  # 6) 暂存（--clean 重建，防上轮残留）+ 上传（上传必须联网 HF_HUB_OFFLINE=0）
+  python scripts/publish/stage_hf.py --hero "$hero" --clean ...
+  HF_HUB_OFFLINE=0 python scripts/publish/upload_hf.py \
+      --model_repo "wjcwqc/${display}Voice" \
       --model_dir "$stage/model" --message "..."
+
+  # 7) 上传成功后落 git：精确路径 add（不要 git add -A，避免带上 REPORT.md.bak）
+  git add -- "examples/deadlock_${hero}/REPORT.md" "examples/deadlock_${hero}/HF_MODEL_CARD.md"
+  git commit -m "docs(${hero}): fill measured eval results and training time"
+  git push origin main
 }
 
 run_hero paige  Paige

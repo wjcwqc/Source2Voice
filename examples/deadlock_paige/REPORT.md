@@ -103,6 +103,27 @@ bookworm_spawn_01.vsnd_c  →  token "bookworm_spawn_01_hero_3d"
 * `checkpoint-450` 最佳 ref 模式：CER 0.019，spk-sim 0.5655（基线 +0.0133）
 * `checkpoint-600` 最佳 ref 模式：CER 0.019，spk-sim 0.5782（基线 +0.0260）
 
+### Violet 量化评估实测结果
+
+评估口径与 Paige 一致：CER = Whisper `medium` 转写后字符级编辑距离；spk-sim = campplus ONNX 嵌入与真人留出集的余弦相似度。
+真人基线 = 20 条 dev 留出集片段互相之间的平均 spk-sim = **0.5640**。
+
+| checkpoint | 模式 | CER ↓ | spk-sim ↑ | vs 真人基线 |
+|---|---|---|---|---|
+| `checkpoint-300` | ref | 0.0 | 0.4993 | -0.0647 below |
+| `checkpoint-300` | noref | 0.0 | 0.5551 | -0.0088 below |
+| `checkpoint-450` | ref | 0.0 | 0.5262 | -0.0378 below |
+| `checkpoint-450` | noref | 0.0 | 0.5342 | -0.0298 below |
+| `checkpoint-600` | ref | 0.0 | 0.5353 | -0.0286 below |
+| `checkpoint-600` | noref | 0.0 | 0.5404 | -0.0235 below |
+
+小结：
+
+* `checkpoint-300` 最佳 noref 模式：CER 0.0，spk-sim 0.5551（基线 -0.0088，最接近真人基线）
+* `checkpoint-450` 最佳 noref 模式：CER 0.0，spk-sim 0.5342（基线 -0.0298）
+* `checkpoint-600` 最佳 noref 模式：CER 0.0，spk-sim 0.5404（基线 -0.0235）
+* 注：Violet 真人基线（0.5640）本身偏高（20 条 dev 片段彼此更像），故各 checkpoint 的 spk-sim 均略低于基线；CER 全为 0.0（转写完全一致）。`checkpoint-300 / noref` 与基线差距最小（-0.0088），接近「学到了音色」的门槛。
+
 
 ## 交付物
 

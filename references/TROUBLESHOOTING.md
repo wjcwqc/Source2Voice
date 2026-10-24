@@ -240,6 +240,16 @@ file:///D:/dwvits/data/omnivoice_dark_willow/tokens/train/audios/shard-000000.ta
 **原因**：prepare 把所有权重搬到了显存。
 **解法**：补丁 `trainer.py` —— prepare 之后把 frozen 权重搬回内存。
 
+### 推理时两个合并模型一起加载 → OOM
+**症状**：想同时试听/对比两个英雄的 merged 模型（各 2.4 GB safetensors），
+`from_pretrained` 第二次直接 CUDA OOM，即使单次只推理一小段。
+**原因**：4 GB 卡一次只能驻留一个 0.6B 合并模型；两个一起 `from_pretrained`
+会同时占 2.4 GB×2 + 推理激活，远超 4 GB。
+**解法**：**逐模型串行**。一个进程内跑完一个英雄后
+`del model; torch.cuda.empty_cache()`（或干脆一个进程只装一个模型，
+跑完退出再启下一个），再加载下一个。`test_infer.py` 本身是单次单模型，
+多英雄对比要分多次跑、不要在同一进程里 `OmniVoice.from_pretrained` 两次。
+
 ### py3.13 装不上 / pydub 报错
 **症状**：`ModuleNotFoundError: No module named 'audioop'`。
 **原因**：Python 3.13 移除了 `audioop`。
@@ -371,6 +381,17 @@ grep -n "add_argument" <OmniVoice源码>/omnivoice/cli/merge_lora.py
 **症状**：150 KB/s，3 GB 要 4.5 小时。
 **原因**：没装 `hf_transfer`。
 **解法**：`pip install hf_transfer` + `HF_HUB_ENABLE_HF_TRANSFER=1` → **34 MB/s**。
+
+### HF 上传「卡死」但其实是正常静默
+**症状**：`upload_hf.py` 打了 `[HH:MM:SS] START <repo>` 后，日志十几分钟
+没有新行，进程还活着，看起来像挂了。
+**原因**：`upload_folder` 走 `hf_xet`/`hf_transfer` 时**只在 START / DONE 打印**，
+中间无逐文件进度；3 GB 级模型走代理时静默 3–10 分钟属正常。
+**判活**（别靠日志行数）：① `python.exe` 进程是否还在；② 代理可达
+（`curl -x http://127.0.0.1:10808 https://huggingface.co` 返回 200）；
+③ HF 仓库 ref/blob 是否有变化。三者都正常就耐心等 `DONE`。
+**切勿**在静默期手动再启一个 `upload_hf.py` 传同一仓库——
+会和正在跑的 `upload_folder` 抢同一 ref，可能冲突或覆盖。
 
 ### 代理连不上 HF
 **症状**：huggingface.co 返回 502，或 hf-mirror 308 跳转。

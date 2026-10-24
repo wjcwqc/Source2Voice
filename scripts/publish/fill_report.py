@@ -7,20 +7,26 @@
         --eval_json "$WORK/eval/paige_eval.json" \
         --report    "examples/deadlock_paige/REPORT.md" \
         --hero      Paige \
-        --train_time "约 5 h 10 min（600 步 × 约 30 s/步）"
+        --train_time "5 h 12 min" \
+        --model_card "examples/deadlock_paige/HF_MODEL_CARD.md" \
+        --model_card_time "约 5 h 12 min（600 步 × 约 31 s/步，RTX 3050 Ti 4 GB）"
 
 做什么
 ------
 1. 读 `eval_omnivoice.py --json_out` 产出的 JSON；
 2. 把 `<!-- TRAINING_RESULTS -->` 替换成实测表格（各 checkpoint 的 CER / spk-sim，
    以及真人基线）；
-3. 顺手更新训练耗时那一行（模型卡与报告里的旧数字常常过期）。
+3. 更新报告里的训练耗时行；
+4. 更新模型卡的「| 耗时 |」行。
 
 设计要点
 --------
 * **幂等**：占位符不存在时（例如已经填过）会退化成"更新耗时"，
   不会把上一次的实测表冲掉。
 * **原地写入前先备份**：写 `.bak`，避免手滑把实测数据弄丢。
+* **报告与模型卡分开取数**：两处耗时写法不同（报告只写总时长，
+  模型卡还要带单步耗时与显卡），所以用两个独立参数，
+  一次调用把两个文件都更新完。
 """
 import argparse
 import json
@@ -74,7 +80,10 @@ def main():
     ap.add_argument("--eval_json", required=True, help="eval_omnivoice.py --json_out 的输出")
     ap.add_argument("--report", required=True, help="要更新的 REPORT.md")
     ap.add_argument("--hero", default=None, help="英雄显示名，用于表头")
-    ap.add_argument("--train_time", default=None, help="训练耗时描述，替换报告里的旧值")
+    ap.add_argument("--train_time", default=None, help="报告里的训练耗时描述，替换旧值")
+    ap.add_argument("--per_step", default=None, help="报告里的单步耗时描述，替换旧值")
+    ap.add_argument("--model_card", default=None, help="要更新的 HF_MODEL_CARD.md")
+    ap.add_argument("--model_card_time", default=None, help="模型卡里的训练耗时描述")
     ap.add_argument("--backup", action="store_true", help="改写前留一份 .bak")
     a = ap.parse_args()
 
@@ -83,6 +92,9 @@ def main():
         raise SystemExit(2)
     if not os.path.exists(a.report):
         print("ERROR: 报告不存在: %s" % a.report, file=sys.stderr)
+        raise SystemExit(2)
+    if a.model_card and not os.path.exists(a.model_card):
+        print("ERROR: 模型卡不存在: %s" % a.model_card, file=sys.stderr)
         raise SystemExit(2)
 
     with open(a.eval_json, encoding="utf-8") as f:
@@ -112,7 +124,7 @@ def main():
             lambda m: m.group(1) + "**%s**" % a.train_time,
             text, count=1)
         if n == 0:
-            # 退而求其次：模型卡里的「| 耗时 | ... |」表格行
+            # 退而求其次：同一文件里的「| 耗时 | ... |」表格行
             new_text, n = re.subn(
                 r"(\|\s*耗时\s*\|)[^|]*\|",
                 lambda m: "%s %s |" % (m.group(1), a.train_time),
@@ -123,9 +135,41 @@ def main():
         else:
             print("[report] 未找到训练耗时行，跳过", file=sys.stderr)
 
+    if a.per_step:
+        # 单步耗时：只替换「单步耗时 **...**」那一行的加粗部分
+        new_text, n = re.subn(
+            r"(单步耗时\s*)(\*\*[^*]*\*\*)?",
+            lambda m: m.group(1) + "**%s**" % a.per_step,
+            text, count=1)
+        if n:
+            text = new_text
+            print("[report] 已更新单步耗时 -> %s" % a.per_step)
+        else:
+            print("[report] 未找到单步耗时行，跳过", file=sys.stderr)
+
     with open(a.report, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
     print("[report] 已更新 %s" % a.report)
+
+    # ---------------- 模型卡 ----------------
+    if a.model_card:
+        with open(a.model_card, encoding="utf-8") as f:
+            card = f.read()
+        card_time = a.model_card_time or a.train_time
+        if card_time:
+            # 模型卡里是表格行：| 耗时 | xxx |
+            new_card, n = re.subn(
+                r"(\|\s*耗时\s*\|)[^|]*\|",
+                lambda m: "%s %s |" % (m.group(1), card_time),
+                card, count=1)
+            if n:
+                card = new_card
+                print("[card] 已更新训练耗时 -> %s" % card_time)
+            else:
+                print("[card] 未找到「| 耗时 |」行，跳过", file=sys.stderr)
+        with open(a.model_card, "w", encoding="utf-8", newline="\n") as f:
+            f.write(card)
+        print("[card] 已更新 %s" % a.model_card)
 
 
 if __name__ == "__main__":

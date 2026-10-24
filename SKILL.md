@@ -7,7 +7,7 @@ agent_created: true
 # Source2Voice：游戏语音 → 音色 TTS 全流程
 
 从「本机装好了 Source 2 游戏」到「HuggingFace 上有一个能用的英雄音色模型」，
-一条端到端可复现的流水线。**六个阶段，每阶段有验收项**。
+一条端到端可复现的流水线。**七个阶段（编号 0–6），每阶段有验收项**。
 
 本技能不是「写代码示范」，而是**已跑通并验证过**的流程：
 Dota 2 邪影芳灵（中文）与 Deadlock Paige / Violet（英文）两个完整实例，
@@ -21,7 +21,7 @@ Dota 2 邪影芳灵（中文）与 Deadlock Paige / Violet（英文）两个完�
 - 「微调完了怎么量化评估效果」
 - 「把训练过程和数据集一起传到 HuggingFace」
 
-## 六个阶段
+## 七个阶段（0–6）
 
 | 阶段 | 内容 | 脚本 | 关键产出 | 参考耗时 |
 |---|---|---|---|---|
@@ -87,6 +87,15 @@ Dota 2 邪影芳灵（中文）与 Deadlock Paige / Violet（英文）两个完�
     grep 匹配不可靠。
 20. **训练期间别跑重活**。`OMNIVOICE_CPU_OFFLOAD=1` 的逐层 offload 依赖
     CPU 供数，并行跑评估会让单步从 28 s 涨到 58 s。
+21. **HF 大文件上传期间日志「静默」不等于卡死**。`upload_folder` 走
+    `hf_xet`/`hf_transfer` 时只在 `START`/`DONE` 打印，中间无逐文件进度。
+    判活看：python 进程是否存活 + 代理可达（`curl -x <proxy> https://huggingface.co`
+    返回 200）。3 GB 模型走代理实测 ~3 min，别误判成 hang 去重跑（重跑会和
+    正在跑的 `upload_folder` 抢同一仓库）。
+22. **4 GB 卡推理时同一时刻只能驻留一个模型**。两个 2.4 GB 合并模型
+    同时 `from_pretrained` 必 OOM。多英雄对比/试听要**逐模型串行**：
+    跑完一个 `del model; torch.cuda.empty_cache()` 再加载下一个。
+    （评估里 `test_infer.py` 是单次单模型，天然无此问题。）
 
 ## 目录结构
 
@@ -107,7 +116,7 @@ Source2Voice/
 │   ├── clean/                阶段 3
 │   ├── train/                阶段 4-5
 │   ├── eval/                 阶段 6
-│   ├── publish/              阶段 7
+│   ├── publish/              阶段 6（发布）
 │   └── auto/                 多英雄自动化（守护脚本 + 流水线模板）
 ├── references/
 │   ├── WORKFLOW.md           通用工作流 + 各游戏差异 + 自动化章节
@@ -130,7 +139,7 @@ export S2V_GAME_DIR="/path/to/Steam/steamapps/common/Deadlock"
 export S2V_DATASET_DIR=/path/to/Hero_VoiceDataset
 python scripts/s2v_config.py       # 打印所有路径 + 检查项
 
-# 2. 按 references/WORKFLOW.md 走六个阶段
+# 2. 按 references/WORKFLOW.md 走七个阶段（0–6）
 ```
 
 ## AI 执行指引
@@ -148,7 +157,9 @@ python scripts/s2v_config.py       # 打印所有路径 + 检查项
 - **训练前先跑 `--steps 20` 的 smoke test**，确认 offload 通路正常再上完整配置。
 - **一个 GPU 只能同时训一个音色**。多英雄排队，不要并发。
 - **多英雄用 `scripts/auto/` 串起来跑**，别手动盯。训练结束后自动接合并/评估/上传。
-- **评估前先确认环境**：`onnxruntime` + ASR 后端（whisper 或 faster-whisper）
-  + 中文还要 `zhconv`，三者缺一都会让评估结果失真或直接报错。
+- **评估/推理前先确认环境分工**（见 `references/WORKFLOW.md` 附.3）：
+  评估（`onnxruntime` + whisper + 中文 `zhconv`）跑在数据/评估环境；
+  推理（`import omnivoice.*`）跑在训练环境 + `PYTHONPATH=<OmniVoice 源码>`。
+  三者环境错配会让评估失真或 `ModuleNotFoundError`。
 - **官方 CLI 的参数签名要先看一眼再写**。`grep -n add_argument <脚本路径>`，
   参数名猜错会让 argparse 静默失败并走回退分支。
