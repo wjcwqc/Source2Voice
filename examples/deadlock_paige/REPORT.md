@@ -78,12 +78,31 @@ bookworm_spawn_01.vsnd_c  →  token "bookworm_spawn_01_hero_3d"
 | save_steps / eval_steps | 150 / 150 |
 | `OMNIVOICE_CPU_OFFLOAD` | **1**（4 GB 显存的关键：冻结权重常驻内存逐层流转 GPU） |
 
-单步耗时 **约 30 s**（RTX 3050 Ti 4 GB），与 Dota 2 那轮几乎一致。
-600 步总耗时约 **5 h 10 min**。
+单步耗时 **约 31 s/步**（RTX 3050 Ti 4 GB），与 Dota 2 那轮几乎一致。
+600 步总耗时约 **5 h 6 min**。
 
 ## 训练结果
 
-<!-- TRAINING_RESULTS -->
+### Paige 量化评估实测结果
+
+评估口径：CER = Whisper `medium` 转写后字符级编辑距离；spk-sim = campplus ONNX 嵌入与真人留出集的余弦相似度。
+真人基线 = 20 条 dev 留出集片段互相之间的平均 spk-sim = **0.5522**。
+
+| checkpoint | 模式 | CER ↓ | spk-sim ↑ | vs 真人基线 |
+|---|---|---|---|---|
+| `checkpoint-300` | ref | 0.019 | 0.5809 | +0.0287 **PASS** |
+| `checkpoint-300` | noref | 0.019 | 0.5617 | +0.0095 **PASS** |
+| `checkpoint-450` | ref | 0.019 | 0.5655 | +0.0133 **PASS** |
+| `checkpoint-450` | noref | 0.019 | 0.5500 | -0.0022 below |
+| `checkpoint-600` | ref | 0.019 | 0.5782 | +0.0260 **PASS** |
+| `checkpoint-600` | noref | 0.019 | 0.5571 | +0.0049 **PASS** |
+
+小结：
+
+* `checkpoint-300` 最佳 ref 模式：CER 0.019，spk-sim 0.5809（基线 +0.0287）
+* `checkpoint-450` 最佳 ref 模式：CER 0.019，spk-sim 0.5655（基线 +0.0133）
+* `checkpoint-600` 最佳 ref 模式：CER 0.019，spk-sim 0.5782（基线 +0.0260）
+
 
 ## 交付物
 

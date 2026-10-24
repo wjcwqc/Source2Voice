@@ -80,7 +80,7 @@ PaigeVoice/
 | 方法 | LoRA r=16 / alpha=32（4.2% 参数可训练）+ `audio_embeddings`/`audio_heads` 全训 |
 | 超参 | lr 1e-4，600 步，batch_tokens 1024 × grad_accum 8，bf16，sdpa |
 | 硬件 | RTX 3050 Ti 4 GB + `OMNIVOICE_CPU_OFFLOAD=1`（冻结权重常驻内存逐层流转 GPU） |
-| 耗时 | 约 5 h 10 min（600 步 × 约 30 s/步，RTX 3050 Ti 4 GB） |
+| 耗时 | 约 5 h 6 min（600 步 × 约 31 s/步，RTX 3050 Ti 4 GB） |
 
 完整报告见 [`examples/deadlock_paige/REPORT.md`](https://github.com/wjcwqc/Source2Voice/blob/main/examples/deadlock_paige/REPORT.md)。
 
